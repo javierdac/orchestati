@@ -55,6 +55,9 @@ export const smalltalkAgent: Agent = {
     if (!REFLEX_INTENTS.includes(signals.primaryIntent)) return null;
     if (signals.complexity >= 0.2) return null;
     if (signals.structure.words > 14) return null;
+    // Y si la intencion fue adivinada, tampoco: responder "¡chau!" a un
+    // pedido de refactor no tiene arreglo posible aguas abajo.
+    if (signals.confidence < 0.6) return null;
     return 0.5;
   },
 
@@ -87,6 +90,7 @@ export function createIdentityAgent(describePool: () => string): Agent {
 
     accepts(signals) {
       if (signals.primaryIntent !== 'identity') return null;
+      if (signals.confidence < 0.6) return null;
       return 0.6;
     },
 

@@ -73,7 +73,73 @@ Un saludo pegado a un pedido real no secuestra el ruteo: las intenciones
 conversacionales escalan su score por la fracción del mensaje que ocupan, así que
 `"hola, refactorizame esto"` rutea a `refactor`, no a `greeting`.
 
-### 2. Router — `src/router/`
+### 2. Clasificador semántico — `src/analysis/semantic/`
+
+El léxico de regex tiene una debilidad estructural: **alguien tiene que
+mantenerlo**, y cuando no matchea no hay red. Medido sobre un set held-out de 62
+frases que no están en ningún lado del código, el léxico solo acierta el
+**35.5%** — el resto cae en `unknown`.
+
+La red es un clasificador local: n-gramas de caracteres (3–5) hasheados con pesos
+TF-IDF, comparados por coseno contra 156 frases prototipo etiquetadas. **Sin
+dependencias, sin descargas, sin tokens.** Los n-gramas de caracteres son los que
+hacen el trabajo: "refactorizame", "refactorizar" y "refactor" comparten casi
+todos sus trigramas, así que caen juntos sin que nadie escriba la regla — y de
+paso absorben los errores de tipeo, que es justo donde el léxico se rompe.
+
+```
+$ pnpm eval
+Evaluacion de intencion — 62 casos held-out
+
+  solo lexico        35.5%
+  lexico + semantico 74.2%
+
+  ✓ 24 que el lexico erraba y el semantico acerto
+      "tengo un deadlock en la base y no se por que"  unknown → code_debug
+      "que estructura le damos al sistema nuevo"      unknown → planning
+      "tirame ideas de nombres para el proyecto"      unknown → creative
+      ...
+```
+
+**Dos umbrales, porque son dos decisiones distintas.** Midiendo la calibración del
+score: con similitud ≥ 0.30 el clasificador acierta el **100%** de las veces, con
+≥ 0.22 el 81%, y sin piso el 63%. Entonces:
+
+- **Rellenar** un `unknown` (piso 0.15) — un 63% de acierto le gana a un `unknown`,
+  que no aporta *ninguna* información de ruteo.
+- **Dar vuelta** una respuesta del léxico (piso 0.30) — para eso hace falta el
+  tramo donde el semántico no se equivoca.
+
+El léxico sigue mandando cuando está seguro: es exacto, auditable y gratis. El
+semántico se consulta **solo si el léxico dudó**, así que la vía rápida no paga
+nada — 27 µs contra 513 µs del caso dudoso.
+
+Cada predicción viene con el prototipo más parecido como evidencia
+(`≈ "armemos el roadmap del trimestre" (0.41)`), así que siempre se puede auditar
+por qué dijo lo que dijo.
+
+#### La incertidumbre se propaga
+
+Esto fue lo que más cambió el diseño. Un clasificador que acierta 74% **falla 26%**,
+y el sistema tiene que saberlo. La confianza ahora viaja hasta el final:
+
+- **La complejidad de una intención adivinada regresa hacia la media.** Si el
+  clasificador dice "farewell" para un pedido de refactor, creerle su 0.00 de
+  complejidad manda el pedido al agente reflex.
+- **El router deja de rankear por intención cuando no está seguro.** El peso de
+  `intent` se recorta por la confianza y pasa a la cobertura de capacidades, que
+  se infiere también de evidencia dura (bloques de código, stack traces, rutas) y
+  no solo del fraseo. Ante la duda, un agente con las capacidades correctas le
+  gana a un especialista de una intención que quizá adivinamos mal.
+- **Una intención adivinada no puede activar el camino reflex.** Es el único
+  camino sin recuperación posible —responde una frase fija y listo—, así que
+  exige confianza ≥ 0.6. Un saludo de verdad la tiene: `hola` da 1.00.
+
+Sin esto, `"separá la logica de negocio de la vista"` se clasificaba como
+`farewell` y el sistema contestaba **"¡Chau! Cuando quieras seguimos."** Ahora va
+a un agente que puede responder.
+
+### 3. Router — `src/router/`
 
 Puntúa **todos** los agentes del pool contra las señales y elige. El score se
 compone de cinco términos, todos visibles en `decision.ranking`:
@@ -81,7 +147,7 @@ compone de cinco términos, todos visibles en `decision.ranking`:
 | Término | Peso | Qué mide |
 |---|---|---|
 | `capability` | 0.30 | cobertura de las capacidades que el pedido requiere |
-| `intent` | 0.26 | si el agente declara esa intención |
+| `intent` | 0.26 | si el agente declara esa intención — **escalado por la confianza** |
 | `tierFit` | 0.24 | distancia al escalón de potencia objetivo (penaliza quedarse corto **y** pasarse) |
 | `prior` | 0.12 | cómo le fue históricamente a ese agente con esa intención |
 | `cost` | 0.08 | penalización por costo relativo |
@@ -103,7 +169,7 @@ En el fan-out cada agente tiene que aportar al menos una capacidad *requerida po
 el pedido* que no esté cubierta — sin esa condición el paralelo se llena de
 agentes irrelevantes.
 
-### 3. Agentes — `src/agents/`
+### 4. Agentes — `src/agents/`
 
 Un agente declara qué sabe hacer, cuánto cuesta y **hasta qué complejidad se
 anima** (`comfortMax`). Si el pedido lo supera, devuelve `escalate` en vez de
@@ -124,7 +190,7 @@ entregar una respuesta pobre, y el orquestador lo vuelve a rutear más arriba.
 | `llm.critic` | standard | critic | revisa el trabajo previo |
 | `llm.synthesizer` | standard | synthesizer | fusiona salidas paralelas |
 
-### 4. Herramientas — `src/tools/`
+### 5. Herramientas — `src/tools/`
 
 Los agentes ejecutan de verdad. Cada herramienta declara su **nivel de riesgo**, y
 ese nivel define qué hace falta para correrla:
@@ -176,7 +242,7 @@ encadenar comandos; `http_fetch` bloquea la red local, incluido el endpoint de
 metadata de cloud; y `calculator` parsea la expresión en vez de evaluarla, así que
 una "cuenta" no puede ejecutar código.
 
-### 5. Executor — `src/runtime/`
+### 6. Executor — `src/runtime/`
 
 Ejecuta la estrategia con presupuesto (`maxCostUsd`, `maxMs`), bucle de escalado,
 tolerancia a fallos —si un agente del paralelo explota, la corrida sigue— y una
@@ -199,6 +265,7 @@ pnpm dev --dry-run "<pedido>"         # deniega toda herramienta: qué *haría*
 pnpm dev --yes "<pedido>"             # autoriza herramientas sin preguntar
 pnpm dev                              # modo interactivo (pregunta cada acción)
 pnpm table                            # banco de calibración del ruteo
+pnpm eval                             # accuracy del clasificador, held-out
 pnpm test
 ```
 
@@ -262,10 +329,13 @@ interfaz `Agent` directamente — `src/agents/reflex.ts` es el ejemplo.
 
 ## Estado
 
-59 tests cubren el analizador, el ranking del router, el bucle de escalado, el
-corte por presupuesto, la tolerancia a fallos, el loop de herramientas y la
-contención del sandbox (escape de rutas, allowlist de binarios, SSRF, `eval`).
+82 tests cubren el analizador, el ranking del router, el bucle de escalado, el
+corte por presupuesto, la tolerancia a fallos, el loop de herramientas, la
+contención del sandbox (escape de rutas, allowlist de binarios, SSRF, `eval`) y
+el clasificador semántico — **incluido un piso de accuracy sobre el set held-out**,
+así que una regresión en el ruteo rompe el build en vez de pasar desapercibida.
 
 Lo que todavía no está: streaming, memoria conversacional más allá del historial
-en curso, y un clasificador por embeddings locales como segunda opinión para los
-casos donde el léxico queda corto (`confidence` bajo).
+en curso, y el 26% del set held-out que el clasificador sigue errando — los
+prototipos son data de entrenamiento y admiten más cobertura, pero no los ajusté
+contra el set de evaluación para no inflar el número.

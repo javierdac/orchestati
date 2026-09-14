@@ -58,11 +58,23 @@ export class Router {
   score(agent: Agent, signals: Signals, targetTier: Tier): CandidateScore {
     const parts: Record<string, number> = {};
 
+    /**
+     * Cuanto le creemos a la intencion detectada. Si el analizador no esta
+     * seguro, el peso de la intencion se recorta y ese peso pasa a la
+     * cobertura de capacidades — que se infiere tambien de evidencia dura
+     * (bloques de codigo, stack traces, rutas) y no solo del fraseo.
+     *
+     * En criollo: ante la duda, un agente con las capacidades correctas le
+     * gana a un especialista de una intencion que quiza adivinamos mal.
+     */
+    const trust = 0.4 + 0.6 * signals.confidence;
+    const pesoCedido = this.weights.intent * (1 - trust);
+
     // 1. Cobertura de capacidades requeridas.
     const required = signals.requiredCapabilities.filter((c) => c !== 'chat');
     const covered = required.filter((c) => agent.capabilities.includes(c)).length;
     const coverage = required.length === 0 ? 1 : covered / required.length;
-    parts.capability = coverage * this.weights.capability;
+    parts.capability = coverage * (this.weights.capability + pesoCedido);
 
     // 2. Match de intencion. El intent primario vale entero; los secundarios, menos.
     let intentMatch = 0;
@@ -75,7 +87,7 @@ export class Router {
         .filter((i) => i.score >= top * 0.5 && agent.intents.includes(i.intent));
       if (secondary.length > 0) intentMatch = 0.6;
     }
-    parts.intent = intentMatch * this.weights.intent;
+    parts.intent = intentMatch * this.weights.intent * trust;
 
     // 3. Ajuste de tier: penaliza tanto quedarse corto como pasarse de rosca.
     const distance = Math.abs(tierIndex(agent.tier) - tierIndex(targetTier));

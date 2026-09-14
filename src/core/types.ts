@@ -107,6 +107,10 @@ export interface Signals {
   risk: number;
   /** 0..1 — que tan seguro esta el analizador de la intencion primaria. */
   confidence: number;
+  /** Quien decidio la intencion: el lexico, el semantico, o los dos. */
+  intentSource: 'lexicon' | 'semantic' | 'merged';
+  /** Lo que dijo el clasificador semantico, gane o pierda. Auditable. */
+  semanticTop?: ScoredIntent;
   /** Tier sugerido por el analisis, antes de que el router decida. */
   suggestedTier: Tier;
 }
