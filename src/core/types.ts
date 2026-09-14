@@ -1,3 +1,8 @@
+import type { ToolCall, ToolCallRecord, ConfirmationPolicy } from '../tools/types.js';
+import type { ToolRegistry } from '../tools/registry.js';
+
+export type { ToolCall, ToolCallRecord, ConfirmationPolicy };
+
 /**
  * Contratos centrales del orquestador.
  *
@@ -155,6 +160,8 @@ export interface AgentOutput {
   /** Metadata libre por agente. */
   meta?: Record<string, unknown>;
   usage?: Usage;
+  /** Herramientas que el agente ejecuto (o intento ejecutar) para responder. */
+  toolCalls?: ToolCallRecord[];
 }
 
 export interface Usage {
@@ -239,12 +246,32 @@ export interface Budget {
 export interface Services {
   model: ModelClient;
   logger: Logger;
+  /** Catalogo de herramientas disponibles para los agentes. */
+  tools: ToolRegistry;
+  /** Quien autoriza las herramientas con efectos. */
+  confirm: ConfirmationPolicy;
+  /** Raiz del sandbox de archivos. */
+  root: string;
 }
 
 export interface ModelClient {
   /** Nombre del backend real en uso ("gateway" | "mock"). */
   readonly kind: string;
   generate(req: ModelRequest): Promise<ModelResponse>;
+}
+
+/** Lo que el modelo necesita saber de una herramienta para poder pedirla. */
+export interface ToolSpec {
+  name: string;
+  description: string;
+  /** JSON Schema de los argumentos. */
+  schema: unknown;
+}
+
+/** Una vuelta completa del loop: lo que el modelo pidio y lo que le devolvimos. */
+export interface ToolTurn {
+  calls: ToolCall[];
+  results: Array<{ id: string; name: string; content: string; ok: boolean }>;
 }
 
 export interface ModelRequest {
@@ -256,12 +283,18 @@ export interface ModelRequest {
   maxOutputTokens?: number;
   temperature?: number;
   signal?: AbortSignal;
+  /** Herramientas ofrecidas en esta llamada. */
+  tools?: ToolSpec[];
+  /** Vueltas previas del loop de herramientas, en orden. */
+  toolTurns?: ToolTurn[];
 }
 
 export interface ModelResponse {
   text: string;
   model: string;
   usage: Usage;
+  /** Si viene con contenido, el modelo pidio ejecutar herramientas. */
+  toolCalls?: ToolCall[];
 }
 
 export interface Logger {
@@ -284,6 +317,8 @@ export interface TraceEvent {
     | 'agent:start'
     | 'agent:end'
     | 'escalate'
+    | 'tool:call'
+    | 'tool:denied'
     | 'synthesize'
     | 'done'
     | 'error';
@@ -299,4 +334,6 @@ export interface OrchestrationResult {
   trace: TraceEvent[];
   usage: Usage;
   escalations: number;
+  /** Todas las herramientas ejecutadas durante la corrida. */
+  toolCalls: ToolCallRecord[];
 }

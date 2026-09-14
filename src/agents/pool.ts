@@ -50,8 +50,10 @@ export const coderAgent: Agent = llmAgent({
   cost: 0.45,
   comfortMax: 0.72,
   temperature: 0.2,
+  tools: ['read_file', 'list_dir', 'search_code', 'write_file'],
   system:
-    'Sos un ingeniero de software senior. Entregá codigo correcto, tipado y ejecutable. ' +
+    'Sos un ingeniero de software senior. Antes de escribir, leé el codigo que vas a tocar. ' +
+    'Para modificar un archivo usá write_file: requiere permiso del usuario, no lo asumas. Entregá codigo correcto, tipado y ejecutable. ' +
     'Explicá solo lo que no sea evidente en el codigo. Respetá el estilo del codigo que te pasen.',
   accepts(signals) {
     if (signals.artifacts.hasCodeBlock) return 0.3;
@@ -69,8 +71,10 @@ export const debuggerAgent: Agent = llmAgent({
   cost: 0.8,
   comfortMax: 0.95,
   temperature: 0.1,
+  tools: ['read_file', 'list_dir', 'search_code', 'run_command'],
+  maxToolSteps: 6,
   system:
-    'Sos un especialista en debugging. Procedé asi: (1) hipotesis de causa raiz, ' +
+    'Sos un especialista en debugging. Buscá el codigo real antes de opinar. Procedé asi: (1) hipotesis de causa raiz, ' +
     '(2) evidencia que la sostiene, (3) fix concreto, (4) como verificarlo. ' +
     'No inventes lineas de codigo que no viste.',
   accepts(signals) {
@@ -90,8 +94,9 @@ export const analystAgent: Agent = llmAgent({
   cost: 0.45,
   comfortMax: 0.7,
   temperature: 0.1,
+  tools: ['calculator', 'read_file'],
   system:
-    'Sos un analista cuantitativo. Mostrá el razonamiento numerico paso a paso y ' +
+    'Sos un analista cuantitativo. Usá calculator para cualquier cuenta: no estimes de cabeza. Mostrá el razonamiento numerico paso a paso y ' +
     'sé explicito con los supuestos. Si faltan datos, decí exactamente cuales.',
 });
 
@@ -105,6 +110,7 @@ export const researcherAgent: Agent = llmAgent({
   cost: 0.85,
   comfortMax: 1,
   temperature: 0.4,
+  tools: ['search_code', 'read_file', 'http_fetch'],
   system:
     'Sos un investigador riguroso. Cubri las opciones relevantes, contrastalas con ' +
     'criterios explicitos y cerrá con una recomendacion. Separá hecho de opinion.',
@@ -139,6 +145,7 @@ export const criticAgent: Agent = llmAgent({
   comfortMax: 1,
   temperature: 0.2,
   maxOutputTokens: 700,
+  tools: ['read_file', 'search_code'],
   system:
     'Sos un revisor critico. Recibis el trabajo de otros agentes. Devolvé la respuesta ' +
     'final corregida, integrando lo bueno y arreglando lo que este mal. Si no hay nada ' +
@@ -172,10 +179,13 @@ export const toolAgent: Agent = llmAgent({
   cost: 0.5,
   comfortMax: 0.85,
   temperature: 0.1,
+  tools: ['run_command', 'write_file', 'read_file', 'list_dir', 'search_code'],
+  maxToolSteps: 6,
   system:
-    'Manejás pedidos de acciones con efectos reales. Nunca asumas la confirmacion: ' +
-    'enumerá exactamente que se va a ejecutar, que es reversible y que no, y pedí ' +
-    'confirmacion explicita antes de proponer el comando final.',
+    'Ejecutás acciones con efectos reales. Cada herramienta que pidas pasa por una ' +
+    'confirmacion del usuario que vos no controlás: si te la deniegan, no insistas — ' +
+    'explicá que hace falta su permiso y por que. Antes de cambiar algo, miralo primero ' +
+    '(read_file / list_dir). Decí siempre que es reversible y que no.',
   accepts(signals) {
     if (signals.risk >= 0.5) return 0.4;
     return 0;

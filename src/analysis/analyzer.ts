@@ -119,6 +119,33 @@ function scoreIntents(norm: string): ScoredIntent[] {
   return list;
 }
 
+/**
+ * Correcciones por artefacto: cuando el lexico no reconocio nada pero el texto
+ * trae evidencia dura (un stack trace, una ruta de archivo), esa evidencia vale
+ * mas que el "no se". No pisa intenciones que si se detectaron con fuerza.
+ */
+function applyArtifactPriors(intents: ScoredIntent[], artifacts: Artifacts): ScoredIntent[] {
+  const primary = intents[0]!;
+  const ensure = (intent: Intent, score: number, evidence: string): ScoredIntent[] => {
+    const existing = intents.find((i) => i.intent === intent);
+    if (existing) {
+      existing.score = Math.max(existing.score, score);
+      if (!existing.evidence.includes(evidence)) existing.evidence.push(evidence);
+    } else {
+      intents.push({ intent, score, evidence: [evidence] });
+    }
+    return intents.sort((a, b) => b.score - a.score);
+  };
+
+  if (artifacts.hasStackTrace) {
+    return ensure('code_debug', 1.2, '(stack trace)');
+  }
+  if (primary.intent === 'unknown' && (artifacts.hasCodeBlock || artifacts.hasFilePath)) {
+    return ensure('code_explain', 0.9, artifacts.hasCodeBlock ? '(bloque de codigo)' : '(ruta de archivo)');
+  }
+  return intents;
+}
+
 function inferCapabilities(intents: ScoredIntent[], artifacts: Artifacts): Capability[] {
   const caps = new Set<Capability>(['chat']);
   const byIntent: Partial<Record<Intent, Capability[]>> = {
@@ -299,7 +326,7 @@ export function analyze(input: string): Signals {
 
   const artifacts = detectArtifacts(raw, norm);
   const structure = detectStructure(raw, norm);
-  const intents = scoreIntents(norm);
+  const intents = applyArtifactPriors(scoreIntents(norm), artifacts);
   const requiredCapabilities = inferCapabilities(intents, artifacts);
   const { value: complexity, breakdown } = scoreComplexity(intents, structure, artifacts, requiredCapabilities);
   const risk = scoreRisk(norm);

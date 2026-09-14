@@ -5,6 +5,7 @@ import { Router } from '../src/router/router.js';
 import { llmAgent } from '../src/agents/base.js';
 import { createDefaultRegistry } from '../src/agents/index.js';
 import { MockModel } from '../src/llm/model.js';
+import { allowAll } from '../src/tools/confirm.js';
 import type { ModelClient, ModelRequest, ModelResponse } from '../src/core/types.js';
 
 /** Modelo espia: cuenta llamadas para probar que el reflex no gasta nada. */
@@ -141,6 +142,24 @@ describe('orchestrator', () => {
 
     expect(res.text.length).toBeGreaterThan(0);
     expect(res.trace.some((e) => e.type === 'error' && e.label.includes('boom'))).toBe(true);
+  });
+
+  it('las herramientas usadas suben al resultado y a la traza', async () => {
+    const o = new Orchestrator({ model: new MockModel(), confirm: allowAll(), root: process.cwd() });
+    const res = await o.run('cuanto es (2340 * 15) / 100');
+
+    expect(res.decision.agents).toContain('llm.analyst');
+    expect(res.toolCalls).toHaveLength(1);
+    expect(res.toolCalls[0]!.call.name).toBe('calculator');
+    expect(res.toolCalls[0]!.result.content).toBe('351');
+    expect(res.trace.some((e) => e.type === 'tool:call')).toBe(true);
+  });
+
+  it('con la politica por defecto un agente no puede escribir', async () => {
+    const registry = createDefaultRegistry();
+    const o = new Orchestrator({ registry, router: new Router(registry), model: new MockModel() });
+    // autoSafe es el default: lectura si, escritura no.
+    expect((o as unknown as { services: { confirm: { name: string } } }).services.confirm.name).toBe('auto-safe');
   });
 
   it('inspect no ejecuta nada', async () => {

@@ -4,6 +4,8 @@ import { stdin, stdout } from 'node:process';
 import { Orchestrator } from './runtime/orchestrator.js';
 import { FileRouterMemory } from './router/memory.js';
 import { createModelClient } from './llm/model.js';
+import { allowAll, askUser, autoSafe, denyAll } from './tools/confirm.js';
+import type { ConfirmationPolicy, ConfirmationRequest } from './tools/types.js';
 import type { Message, OrchestrationResult } from './core/types.js';
 
 const C = {
@@ -16,6 +18,12 @@ const C = {
   red: (s: string) => `\x1b[31m${s}\x1b[0m`,
 };
 
+const RISK_COLOR: Record<string, (s: string) => string> = {
+  safe: C.green,
+  confirm: C.yellow,
+  destructive: C.red,
+};
+
 const TIER_COLOR: Record<string, (s: string) => string> = {
   reflex: C.green,
   light: C.cyan,
@@ -23,6 +31,35 @@ const TIER_COLOR: Record<string, (s: string) => string> = {
   deep: C.magenta,
   swarm: C.red,
 };
+
+let rlShared: ReturnType<typeof createInterface> | undefined;
+function readline(): ReturnType<typeof createInterface> {
+  rlShared ??= createInterface({ input: stdin, output: stdout });
+  return rlShared;
+}
+
+/** Muestra que se va a ejecutar y espera un si explicito. */
+async function promptConfirm(req: ConfirmationRequest): Promise<boolean> {
+  const tint = RISK_COLOR[req.risk] ?? C.yellow;
+  console.log(
+    `\n${tint('⚠ confirmacion')} ${C.bold(req.agentId)} quiere ${C.bold(req.summary)}` +
+      ` ${C.dim(`[${req.tool} · ${req.risk}]`)}`,
+  );
+  if (req.risk === 'destructive') {
+    console.log(C.red('  esta accion puede no ser reversible'));
+  }
+  const ans = (await readline().question(`  ${C.bold('¿ejecutar? (s/N) ')}`)).trim().toLowerCase();
+  return ans === 's' || ans === 'si' || ans === 'y' || ans === 'yes';
+}
+
+/** Elige la politica segun los flags y si hay una terminal del otro lado. */
+function choosePolicy(flags: Set<string>): ConfirmationPolicy {
+  if (flags.has('--dry-run')) return denyAll();
+  if (flags.has('--yes')) return allowAll();
+  if (stdin.isTTY) return askUser(promptConfirm);
+  // Sin terminal no hay a quien preguntarle: solo lectura.
+  return autoSafe();
+}
 
 function bar(v: number, width = 20): string {
   const n = Math.round(Math.min(1, Math.max(0, v)) * width);
@@ -78,6 +115,13 @@ function printResult(res: OrchestrationResult, opts: { trace: boolean }): void {
   console.log(
     `\n${tint(`[${res.decision.tier}]`)} ${C.dim(`${res.decision.strategy} · ${res.decision.agents.join(' → ')}`)}`,
   );
+
+  for (const rec of res.toolCalls) {
+    const tint2 = RISK_COLOR[rec.risk] ?? C.dim;
+    const mark = rec.approved ? (rec.result.ok ? '✓' : '✗') : '⊘';
+    console.log(C.dim(`  ${mark} ${tint2(rec.call.name)} ${rec.approved ? '' : '(no autorizada)'}`));
+  }
+
   console.log(`\n${res.text}\n`);
   if (opts.trace) printTrace(res);
 }
@@ -89,8 +133,11 @@ async function main(): Promise<void> {
   const input = args.join(' ').trim();
 
   const model = createModelClient();
+  const confirm = choosePolicy(flags);
   const orchestrator = new Orchestrator({
     model,
+    confirm,
+    root: process.cwd(),
     routerOptions: { memory: new FileRouterMemory('.orchestati/memory.json') },
   });
 
@@ -103,13 +150,16 @@ ${C.bold('orchestati')} — orquestador dinamico de agentes
   pnpm dev                       modo interactivo
 
   ${C.bold('flags')}
-    --explain   solo analisis + ruteo
+    --explain   solo analisis + ruteo, sin ejecutar
     --trace     imprime la traza de ejecucion
     --json      salida en JSON
+    --yes       autoriza las herramientas sin preguntar
+    --dry-run   deniega toda herramienta: muestra que *haria* el agente
 `);
     return;
   }
 
+  console.log(C.dim(`herramientas: politica ${confirm.name}`));
   if (model.kind === 'mock') {
     console.log(C.dim('⚠︎ sin AI_GATEWAY_API_KEY: usando MockModel (el ruteo es real, las respuestas no)'));
   }
@@ -130,7 +180,7 @@ ${C.bold('orchestati')} — orquestador dinamico de agentes
   }
 
   // Modo interactivo
-  const rl = createInterface({ input: stdin, output: stdout });
+  const rl = readline();
   const history: Message[] = [];
   console.log(C.dim('modo interactivo · /explain <texto> · /trace · /salir\n'));
   let showTrace = flags.has('--trace');

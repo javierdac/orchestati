@@ -7,4 +7,6 @@ export * from './router/memory.js';
 export * from './runtime/orchestrator.js';
 export * from './runtime/trace.js';
 export * from './llm/model.js';
+export * from './tools/index.js';
+export * from './runtime/tool-loop.js';
 export * from './agents/index.js';

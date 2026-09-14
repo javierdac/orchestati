@@ -1,3 +1,4 @@
+import { runToolLoop } from '../runtime/tool-loop.js';
 import type {
   Agent,
   AgentContext,
@@ -26,6 +27,10 @@ export interface LlmAgentSpec {
    * Por encima de esto pide escalar en vez de responder mal.
    */
   comfortMax?: number;
+  /** Nombres de herramientas que este agente puede usar. */
+  tools?: string[];
+  /** Cuantas vueltas de herramientas se le permiten. */
+  maxToolSteps?: number;
   accepts?(signals: Signals): number | null;
 }
 
@@ -86,7 +91,7 @@ export function llmAgent(spec: LlmAgentSpec): Agent {
         };
       }
 
-      const res = await ctx.services.model.generate({
+      const request = {
         tier: spec.tier,
         system: spec.system,
         prompt: buildPrompt(ctx),
@@ -94,11 +99,34 @@ export function llmAgent(spec: LlmAgentSpec): Agent {
         ...(spec.temperature !== undefined ? { temperature: spec.temperature } : {}),
         ...(spec.maxOutputTokens ? { maxOutputTokens: spec.maxOutputTokens } : {}),
         ...(ctx.signal ? { signal: ctx.signal } : {}),
-      });
+      };
 
       // Confianza: alta si el agente esta comodo con la complejidad del pedido.
       const fit = Math.max(0, 1 - Math.max(0, ctx.signals.complexity - comfortMax) * 2);
       const confidence = Math.min(0.98, 0.55 + fit * 0.4);
+
+      const disponibles = spec.tools?.length ? ctx.services.tools.pick(spec.tools) : [];
+
+      if (disponibles.length > 0) {
+        const loop = await runToolLoop({
+          ctx,
+          agentId: spec.id,
+          tools: disponibles,
+          request,
+          maxSteps: spec.maxToolSteps ?? 4,
+        });
+
+        return {
+          agentId: spec.id,
+          text: loop.text,
+          confidence,
+          usage: loop.usage,
+          toolCalls: loop.records,
+          meta: { model: loop.model, toolSteps: loop.steps },
+        };
+      }
+
+      const res = await ctx.services.model.generate(request);
 
       return {
         agentId: spec.id,

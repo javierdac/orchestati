@@ -113,8 +113,10 @@ export const INTENT_RULES: IntentRule[] = [
     intent: 'code_explain',
     weight: 0.9,
     patterns: [
-      /\b(explicame (este|el) (codigo|snippet)|que hace (este|el) (codigo|funcion)|entender (este|el) codigo)\b/,
-      /\b(explain (this|the) (code|snippet|function)|what does (this|the) (code|function) do|walk through the code)\b/,
+      /\b(explica(me|r)?|contame|decime|mostrame)\b.{0,20}\b(que hace|como funciona|para que sirve|que exporta)\b/,
+      /\b(explica(me|r)?|entender|revisa(r|me)?|lee(me|r)?)\b.{0,30}\b(codigo|snippet|archivo|funcion|clase|modulo|script|componente|test)\b/,
+      /\b(que hace|como funciona)\b.{0,20}\b(este|el|la|ese)\b.{0,20}\b(codigo|archivo|funcion|clase|modulo)\b/,
+      /\b(explain|walk (me )?through|what does)\b.{0,30}\b(code|snippet|file|function|class|module|script)\b/,
     ],
   },
   {

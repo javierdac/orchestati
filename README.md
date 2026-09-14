@@ -115,16 +115,68 @@ entregar una respuesta pobre, y el orquestador lo vuelve a rutear más arriba.
 | `reflex.identity` | reflex | responder | "¿quién sos?" — describe el pool real |
 | `llm.quick` | light | responder | preguntas directas, traducciones cortas |
 | `llm.writer` | standard | worker | redacción, resúmenes, explicaciones |
-| `llm.coder` | standard | worker | escribir, explicar y refactorizar código |
-| `llm.analyst` | standard | worker | cálculos, métricas, costos |
-| `llm.tools` | standard | worker | acciones con efecto — pide confirmación |
-| `llm.debugger` | deep | worker | stack traces y causa raíz |
+| `llm.coder` | standard | worker | código — lee y escribe archivos |
+| `llm.analyst` | standard | worker | cálculos y costos — usa `calculator` |
+| `llm.tools` | standard | worker | acciones con efecto — ejecuta comandos |
+| `llm.debugger` | deep | worker | stack traces y causa raíz — lee el código real |
 | `llm.researcher` | deep | worker | comparaciones y trade-offs |
 | `llm.planner` | deep | planner | descompone en pasos accionables |
 | `llm.critic` | standard | critic | revisa el trabajo previo |
 | `llm.synthesizer` | standard | synthesizer | fusiona salidas paralelas |
 
-### 4. Executor — `src/runtime/`
+### 4. Herramientas — `src/tools/`
+
+Los agentes ejecutan de verdad. Cada herramienta declara su **nivel de riesgo**, y
+ese nivel define qué hace falta para correrla:
+
+| Herramienta | Riesgo | Qué hace |
+|---|---|---|
+| `read_file` · `list_dir` · `search_code` | `safe` | leen el proyecto — se ejecutan sin preguntar |
+| `calculator` | `safe` | aritmética exacta, **sin `eval`** |
+| `write_file` · `http_fetch` | `confirm` | escriben o salen a la red |
+| `run_command` | `destructive` | ejecuta un binario del proyecto |
+
+**El loop de herramientas lo corre Orchestati, no el SDK del proveedor.** Esa es la
+decisión de diseño que sostiene todo lo demás: entre que el modelo pide una
+herramienta y esa herramienta se ejecuta tiene que pasar un gate de confirmación.
+Si el loop vive adentro del SDK, ese gate no existe.
+
+```
+modelo pide  ─►  ¿existe?  ─►  ¿argumentos válidos?  ─►  ¿autorizado?  ─►  ejecuta
+                     │                  │                      │
+                     └──────────────────┴──────────────────────┘
+                         al modelo se le explica qué pasó y sigue
+```
+
+Una denegación **no es un error**: al modelo se le devuelve *"hace falta el permiso
+del usuario"* y sigue trabajando sin esa herramienta.
+
+**Políticas de confirmación** (`src/tools/confirm.ts`):
+
+- `autoSafe()` — **el default**: lee sin preguntar, no escribe nada sin permiso.
+- `askUser(fn)` — lo `safe` pasa directo, el resto va a quien decida.
+- `denyAll()` — rechaza todo: sirve para ver qué *haría* un agente (`--dry-run`).
+- `allowAll()` — sin preguntar, sólo para entornos donde la autorización ya se dio
+  afuera (`--yes`). Nunca es el default.
+
+```console
+$ pnpm dev "corre los tests del proyecto con pnpm test"
+  ⊘ run_command (no autorizada)
+  No se ejecutó "ejecutar: pnpm test": la política activa solo permite lectura.
+
+$ pnpm dev --yes "corre los tests del proyecto con pnpm test"
+  ✓ run_command
+  RUN v2.1.9 — 59 tests passed
+```
+
+**Contención:** las herramientas de archivos no salen de la raíz del proyecto
+(`..`, rutas absolutas y bytes nulos se rechazan); `run_command` usa una **lista de
+permitidos** —no de prohibidos— y rechaza metacaracteres de shell que permitirían
+encadenar comandos; `http_fetch` bloquea la red local, incluido el endpoint de
+metadata de cloud; y `calculator` parsea la expresión en vez de evaluarla, así que
+una "cuenta" no puede ejecutar código.
+
+### 5. Executor — `src/runtime/`
 
 Ejecuta la estrategia con presupuesto (`maxCostUsd`, `maxMs`), bucle de escalado,
 tolerancia a fallos —si un agente del paralelo explota, la corrida sigue— y una
@@ -143,7 +195,9 @@ pnpm dev "hola"                       # ejecuta
 pnpm dev --explain "<pedido>"         # muestra análisis + decisión, sin ejecutar
 pnpm dev --trace "<pedido>"           # ejecuta e imprime la traza
 pnpm dev --json "<pedido>"            # salida estructurada
-pnpm dev                              # modo interactivo
+pnpm dev --dry-run "<pedido>"         # deniega toda herramienta: qué *haría*
+pnpm dev --yes "<pedido>"             # autoriza herramientas sin preguntar
+pnpm dev                              # modo interactivo (pregunta cada acción)
 pnpm table                            # banco de calibración del ruteo
 pnpm test
 ```
@@ -163,7 +217,20 @@ res.text;              // respuesta final
 res.decision.agents;   // quién la atendió
 res.decision.ranking;  // por qué ganó ese
 res.usage.costUsd;     // qué costó
+res.toolCalls;         // qué herramientas usó, y cuáles le denegaron
 res.trace;             // qué pasó, paso a paso
+```
+
+Para controlar qué puede tocar:
+
+```ts
+import { Orchestrator, askUser, denyAll } from 'orchestati';
+
+new Orchestrator({ confirm: denyAll() });              // sin herramientas
+new Orchestrator({ root: '/ruta/al/proyecto' });       // otro sandbox
+new Orchestrator({ confirm: askUser(async (req) => {   // tu propio gate
+  return await miUI.confirmar(req.summary, req.risk);
+}) });
 ```
 
 ## Agregar un agente
@@ -195,10 +262,10 @@ interfaz `Agent` directamente — `src/agents/reflex.ts` es el ejemplo.
 
 ## Estado
 
-26 tests cubren el analizador, el ranking del router, el bucle de escalado, el
-corte por presupuesto y la tolerancia a fallos.
+59 tests cubren el analizador, el ranking del router, el bucle de escalado, el
+corte por presupuesto, la tolerancia a fallos, el loop de herramientas y la
+contención del sandbox (escape de rutas, allowlist de binarios, SSRF, `eval`).
 
-Lo que todavía no está: herramientas ejecutables de verdad (hoy `llm.tools` sólo
-propone y pide confirmación), streaming, memoria conversacional más allá del
-historial en curso, y un clasificador por embeddings locales como segunda opinión
-para los casos donde el léxico queda corto (`confidence` bajo).
+Lo que todavía no está: streaming, memoria conversacional más allá del historial
+en curso, y un clasificador por embeddings locales como segunda opinión para los
+casos donde el léxico queda corto (`confidence` bajo).

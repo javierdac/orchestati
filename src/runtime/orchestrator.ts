@@ -4,6 +4,10 @@ import { Router } from '../router/router.js';
 import type { RouterOptions } from '../router/router.js';
 import { AgentRegistry } from '../router/registry.js';
 import { createModelClient } from '../llm/model.js';
+import { ToolRegistry } from '../tools/registry.js';
+import { createDefaultToolRegistry } from '../tools/index.js';
+import { autoSafe } from '../tools/confirm.js';
+import type { ConfirmationPolicy, ToolCallRecord } from '../tools/types.js';
 import { Tracer } from './trace.js';
 import { TIER_ORDER, tierIndex } from '../core/types.js';
 import type {
@@ -16,6 +20,7 @@ import type {
   Message,
   ModelClient,
   OrchestrationResult,
+  Services,
   Signals,
   Tier,
   Usage,
@@ -27,6 +32,15 @@ export interface OrchestratorOptions {
   routerOptions?: RouterOptions;
   model?: ModelClient;
   logger?: Logger;
+  /** Catalogo de herramientas. Por defecto, el completo. */
+  tools?: ToolRegistry;
+  /**
+   * Quien autoriza las herramientas con efectos. El default (`autoSafe`) deja
+   * leer sin preguntar y no escribe nada sin permiso explicito.
+   */
+  confirm?: ConfirmationPolicy;
+  /** Raiz del sandbox de archivos. Por defecto, el directorio actual. */
+  root?: string;
   /** Presupuesto por defecto de cada corrida. */
   maxCostUsd?: number;
   maxMs?: number;
@@ -66,6 +80,7 @@ export class Orchestrator {
   readonly router: Router;
   private model: ModelClient;
   private logger: Logger;
+  private services: Services;
   private maxCostUsd: number;
   private maxMs: number;
   private maxEscalations: number;
@@ -75,6 +90,13 @@ export class Orchestrator {
     this.router = opts.router ?? new Router(this.registry, opts.routerOptions ?? {});
     this.model = opts.model ?? createModelClient();
     this.logger = opts.logger ?? silentLogger;
+    this.services = {
+      model: this.model,
+      logger: this.logger,
+      tools: opts.tools ?? createDefaultToolRegistry(),
+      confirm: opts.confirm ?? autoSafe(),
+      root: opts.root ?? process.cwd(),
+    };
     this.maxCostUsd = opts.maxCostUsd ?? 0.5;
     this.maxMs = opts.maxMs ?? 120_000;
     this.maxEscalations = opts.maxEscalations ?? 2;
@@ -145,13 +167,15 @@ export class Orchestrator {
 
     const usage = outputs.reduce((acc, o) => addUsage(acc, o.usage), emptyUsage());
     usage.ms = tracer.elapsed();
+    const toolCalls: ToolCallRecord[] = outputs.flatMap((o) => o.toolCalls ?? []);
 
-    tracer.push('done', `${outputs.length} agente(s), $${usage.costUsd.toFixed(5)}`, {
-      escalations,
-      ms: usage.ms,
-    });
+    tracer.push(
+      'done',
+      `${outputs.length} agente(s), ${toolCalls.length} herramienta(s), $${usage.costUsd.toFixed(5)}`,
+      { escalations, ms: usage.ms },
+    );
 
-    return { text, signals, decision, outputs, trace: tracer.all(), usage, escalations };
+    return { text, signals, decision, outputs, trace: tracer.all(), usage, escalations, toolCalls };
   }
 
   // -------------------------------------------------------------------------
@@ -254,13 +278,31 @@ export class Orchestrator {
       history: env.history ?? [],
       priorOutputs,
       budget: env.budget,
-      services: { model: this.model, logger: this.logger },
+      services: this.services,
       depth: env.escalations,
       ...(env.signal ? { signal: env.signal } : {}),
     };
 
     const out = await agent.run(ctx);
     env.budget.spentUsd += out.usage?.costUsd ?? 0;
+
+    // Los agentes no conocen al tracer: la traza de herramientas se deriva de
+    // lo que reportaron al volver.
+    for (const rec of out.toolCalls ?? []) {
+      const tool = rec.call.name;
+      if (rec.approved) {
+        env.tracer.push('tool:call', `${agent.id} → ${tool}`, {
+          risk: rec.risk,
+          ok: rec.result.ok,
+          ms: rec.ms,
+        });
+      } else {
+        env.tracer.push('tool:denied', `${agent.id} → ${tool} (no ejecutada)`, {
+          risk: rec.risk,
+          motivo: rec.result.content.slice(0, 120),
+        });
+      }
+    }
 
     env.tracer.push(
       'agent:end',
