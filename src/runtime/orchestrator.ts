@@ -1,0 +1,278 @@
+import { analyze } from '../analysis/analyzer.js';
+import { createDefaultRegistry } from '../agents/index.js';
+import { Router } from '../router/router.js';
+import type { RouterOptions } from '../router/router.js';
+import { AgentRegistry } from '../router/registry.js';
+import { createModelClient } from '../llm/model.js';
+import { Tracer } from './trace.js';
+import { TIER_ORDER, tierIndex } from '../core/types.js';
+import type {
+  Agent,
+  AgentContext,
+  AgentOutput,
+  Budget,
+  Decision,
+  Logger,
+  Message,
+  ModelClient,
+  OrchestrationResult,
+  Signals,
+  Tier,
+  Usage,
+} from '../core/types.js';
+
+export interface OrchestratorOptions {
+  registry?: AgentRegistry;
+  router?: Router;
+  routerOptions?: RouterOptions;
+  model?: ModelClient;
+  logger?: Logger;
+  /** Presupuesto por defecto de cada corrida. */
+  maxCostUsd?: number;
+  maxMs?: number;
+  maxEscalations?: number;
+}
+
+export interface RunOptions {
+  history?: Message[];
+  signal?: AbortSignal;
+  maxCostUsd?: number;
+  maxMs?: number;
+}
+
+const silentLogger: Logger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+};
+
+function emptyUsage(): Usage {
+  return { inputTokens: 0, outputTokens: 0, costUsd: 0, ms: 0 };
+}
+
+function addUsage(a: Usage, b?: Usage): Usage {
+  if (!b) return a;
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    costUsd: a.costUsd + b.costUsd,
+    ms: a.ms + b.ms,
+  };
+}
+
+export class Orchestrator {
+  readonly registry: AgentRegistry;
+  readonly router: Router;
+  private model: ModelClient;
+  private logger: Logger;
+  private maxCostUsd: number;
+  private maxMs: number;
+  private maxEscalations: number;
+
+  constructor(opts: OrchestratorOptions = {}) {
+    this.registry = opts.registry ?? createDefaultRegistry();
+    this.router = opts.router ?? new Router(this.registry, opts.routerOptions ?? {});
+    this.model = opts.model ?? createModelClient();
+    this.logger = opts.logger ?? silentLogger;
+    this.maxCostUsd = opts.maxCostUsd ?? 0.5;
+    this.maxMs = opts.maxMs ?? 120_000;
+    this.maxEscalations = opts.maxEscalations ?? 2;
+  }
+
+  /** Solo analiza, sin ejecutar nada. Util para inspeccionar el ruteo. */
+  inspect(input: string): { signals: Signals; decision: Decision } {
+    const signals = analyze(input);
+    return { signals, decision: this.router.route(signals) };
+  }
+
+  async run(input: string, opts: RunOptions = {}): Promise<OrchestrationResult> {
+    const tracer = new Tracer();
+    const signals = analyze(input);
+
+    tracer.push('analyze', `intent=${signals.primaryIntent} complejidad=${signals.complexity.toFixed(2)}`, {
+      tier: signals.suggestedTier,
+      lang: signals.lang,
+      risk: Number(signals.risk.toFixed(2)),
+      confidence: Number(signals.confidence.toFixed(2)),
+      capabilities: signals.requiredCapabilities,
+    });
+
+    const budget: Budget = {
+      maxCostUsd: opts.maxCostUsd ?? this.maxCostUsd,
+      spentUsd: 0,
+      maxMs: opts.maxMs ?? this.maxMs,
+      startedAt: Date.now(),
+      maxEscalations: this.maxEscalations,
+    };
+
+    let minTier: Tier | undefined;
+    let escalations = 0;
+    let decision = this.router.route(signals);
+    let outputs: AgentOutput[] = [];
+    let text = '';
+
+    // Bucle de escalado: un agente puede declararse insuficiente y devolver
+    // el pedido al router pidiendo mas potencia.
+    for (;;) {
+      tracer.push(
+        'route',
+        `${decision.strategy} -> ${decision.agents.join(' + ')}${decision.synthesizer ? ` | sintetiza ${decision.synthesizer}` : ''}`,
+        { tier: decision.tier, reason: decision.reason, top: decision.ranking.slice(0, 3) },
+      );
+
+      const run = await this.execute(decision, { input, signals, budget, tracer, escalations, ...opts });
+      outputs = [...outputs, ...run.outputs];
+      text = run.text;
+
+      if (!run.escalate || escalations >= this.maxEscalations) break;
+
+      const from = decision.tier;
+      const to = run.escalate.toTier ?? TIER_ORDER[Math.min(tierIndex(from) + 1, TIER_ORDER.length - 1)]!;
+      if (tierIndex(to) <= tierIndex(from)) break;
+
+      escalations++;
+      minTier = to;
+      tracer.push('escalate', `${from} -> ${to}: ${run.escalate.reason}`, { escalations });
+      decision = this.router.route(signals, minTier);
+    }
+
+    // Feedback al router: los agentes que respondieron bien suben de prioridad.
+    for (const o of outputs) {
+      if (!o.text && o.escalate) this.router.feedback(signals, o.agentId, 0.15);
+      else this.router.feedback(signals, o.agentId, o.confidence);
+    }
+
+    const usage = outputs.reduce((acc, o) => addUsage(acc, o.usage), emptyUsage());
+    usage.ms = tracer.elapsed();
+
+    tracer.push('done', `${outputs.length} agente(s), $${usage.costUsd.toFixed(5)}`, {
+      escalations,
+      ms: usage.ms,
+    });
+
+    return { text, signals, decision, outputs, trace: tracer.all(), usage, escalations };
+  }
+
+  // -------------------------------------------------------------------------
+  // Estrategias
+  // -------------------------------------------------------------------------
+
+  private async execute(
+    decision: Decision,
+    env: {
+      input: string;
+      signals: Signals;
+      budget: Budget;
+      tracer: Tracer;
+      escalations: number;
+      history?: Message[];
+      signal?: AbortSignal;
+    },
+  ): Promise<{ text: string; outputs: AgentOutput[]; escalate?: AgentOutput['escalate'] }> {
+    switch (decision.strategy) {
+      case 'direct': {
+        const agent = this.registry.get(decision.agents[0]!);
+        const out = await this.invoke(agent, [], env);
+        return { text: out.text, outputs: [out], ...(out.escalate ? { escalate: out.escalate } : {}) };
+      }
+
+      case 'chain': {
+        const outputs: AgentOutput[] = [];
+        for (const id of decision.agents) {
+          if (this.exhausted(env.budget)) {
+            env.tracer.push('error', `presupuesto agotado antes de ${id}`);
+            break;
+          }
+          const out = await this.invoke(this.registry.get(id), outputs, env);
+          outputs.push(out);
+          if (out.escalate) {
+            return { text: '', outputs, escalate: out.escalate };
+          }
+        }
+        const last = [...outputs].reverse().find((o) => o.text);
+        return { text: last?.text ?? '', outputs };
+      }
+
+      case 'parallel': {
+        const workers = decision.agents.map((id) => this.registry.get(id));
+        const settled = await Promise.all(
+          workers.map((a) =>
+            this.invoke(a, [], env).catch((err: unknown) => {
+              env.tracer.push('error', `${a.id} fallo: ${String(err)}`);
+              const failed: AgentOutput = {
+                agentId: a.id,
+                text: '',
+                confidence: 0,
+                meta: { error: String(err) },
+              };
+              return failed;
+            }),
+          ),
+        );
+
+        const useful = settled.filter((o) => o.text);
+        if (useful.length === 0) {
+          const escalate = settled.find((o) => o.escalate)?.escalate;
+          return { text: '', outputs: settled, ...(escalate ? { escalate } : {}) };
+        }
+
+        if (decision.synthesizer && useful.length > 1 && !this.exhausted(env.budget)) {
+          env.tracer.push('synthesize', `${decision.synthesizer} fusiona ${useful.length} salidas`);
+          const synth = await this.invoke(this.registry.get(decision.synthesizer), useful, env);
+          return { text: synth.text, outputs: [...settled, synth] };
+        }
+
+        const merged = useful.map((o) => o.text).join('\n\n---\n\n');
+        return { text: merged, outputs: settled };
+      }
+    }
+  }
+
+  private exhausted(budget: Budget): boolean {
+    return budget.spentUsd >= budget.maxCostUsd || Date.now() - budget.startedAt >= budget.maxMs;
+  }
+
+  private async invoke(
+    agent: Agent,
+    priorOutputs: AgentOutput[],
+    env: {
+      input: string;
+      signals: Signals;
+      budget: Budget;
+      tracer: Tracer;
+      escalations: number;
+      history?: Message[];
+      signal?: AbortSignal;
+    },
+  ): Promise<AgentOutput> {
+    env.tracer.push('agent:start', `${agent.id} (${agent.tier})`);
+
+    const ctx: AgentContext = {
+      input: env.input,
+      signals: env.signals,
+      history: env.history ?? [],
+      priorOutputs,
+      budget: env.budget,
+      services: { model: this.model, logger: this.logger },
+      depth: env.escalations,
+      ...(env.signal ? { signal: env.signal } : {}),
+    };
+
+    const out = await agent.run(ctx);
+    env.budget.spentUsd += out.usage?.costUsd ?? 0;
+
+    env.tracer.push(
+      'agent:end',
+      out.escalate ? `${agent.id} pide escalar` : `${agent.id} respondio`,
+      {
+        confidence: Number(out.confidence.toFixed(2)),
+        costUsd: out.usage?.costUsd ?? 0,
+        ms: out.usage?.ms ?? 0,
+        chars: out.text.length,
+      },
+    );
+
+    return out;
+  }
+}

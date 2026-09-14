@@ -1,0 +1,204 @@
+# Orchestati
+
+Orquestador dinámico de agentes en TypeScript. **Analiza el pedido localmente
+—sin gastar un solo token— y recién ahí decide qué agente (o combinación de
+agentes) lo atiende.**
+
+Si le decís `hola`, responde en 5 ms y cuesta $0.
+Si le pedís que investigue, planifique y estime costos, abre tres agentes en
+paralelo y sintetiza.
+
+```
+$ pnpm dev --trace "hola"
+[reflex] direct · reflex.smalltalk
+
+¡Hola! ¿En qué te doy una mano?
+
+    4ms analyze      intent=greeting complejidad=0.01
+    5ms route        direct -> reflex.smalltalk
+    5ms done         1 agente(s), $0.00000
+```
+
+## La idea
+
+La mayoría de los sistemas de agentes mandan *todo* al modelo más grande. Acá el
+camino se elige antes, con un analizador determinista que corre en microsegundos:
+
+```
+input ──► Analyzer ──► Router ──► Executor ──► respuesta
+          (local)      (local)     (agentes)
+          0 tokens     0 tokens
+```
+
+## Ruteo real
+
+Salida de `pnpm table`, el banco de calibración del repo:
+
+| Pedido | Intent | Cpx | Tier | Estrategia | Agentes |
+|---|---|---|---|---|---|
+| `hola` | greeting | 0.01 | reflex | direct | `reflex.smalltalk` |
+| `quien sos y que podes hacer` | identity | 0.07 | reflex | direct | `reflex.identity` |
+| `que es un closure en javascript` | factual_qa | 0.21 | light | direct | `llm.quick` |
+| `cuanto es el 15% de 2340` | math | 0.29 | standard | direct | `llm.analyst` |
+| `escribime una funcion que valide un email` | code_generate | 0.38 | standard | direct | `llm.coder` |
+| `borra todos los registros de users en produccion` | tool_action | 0.36 | standard | direct | `llm.tools` |
+| `TypeError: cannot read property map of undefined…` | code_debug | 0.51 | deep | chain | `llm.debugger → llm.critic` |
+| `diseñame la arquitectura de un sistema multi-tenant` | planning | 0.54 | deep | chain | `llm.planner → llm.researcher → llm.critic` |
+| `investiga y compara…, despues un plan y ademas costos` | research | 0.74 | swarm | parallel | `llm.researcher ∥ llm.planner ∥ llm.analyst → llm.synthesizer` |
+
+## Las cuatro piezas
+
+### 1. Analyzer — `src/analysis/`
+
+Determinista, sincrónico, sin red. Extrae de cada pedido:
+
+- **intención** (20 tipos, léxico bilingüe es/en) con la evidencia que la disparó;
+- **artefactos**: bloques de código, stack traces, URLs, rutas de archivo, JSON;
+- **estructura**: palabras, preguntas, ítems de lista, **pedidos encadenados**;
+- **riesgo** (0–1): verbos irreversibles como `borrar`, `deploy a prod`, `cobrar`;
+- **complejidad** (0–1), con su desglose para poder auditarla.
+
+El modelo de complejidad trata la dificultad intrínseca de la tarea como un
+**piso**, no como un sumando: *"diseñame la arquitectura de X"* es un pedido
+pesado aunque se diga en doce palabras. El resto de los rasgos amplifican.
+
+```ts
+import { analyze } from 'orchestati';
+
+analyze('hola').complexity;                    // 0.01 → reflex
+analyze('diseñame la arquitectura…').complexity; // 0.54 → deep
+```
+
+Un saludo pegado a un pedido real no secuestra el ruteo: las intenciones
+conversacionales escalan su score por la fracción del mensaje que ocupan, así que
+`"hola, refactorizame esto"` rutea a `refactor`, no a `greeting`.
+
+### 2. Router — `src/router/`
+
+Puntúa **todos** los agentes del pool contra las señales y elige. El score se
+compone de cinco términos, todos visibles en `decision.ranking`:
+
+| Término | Peso | Qué mide |
+|---|---|---|
+| `capability` | 0.30 | cobertura de las capacidades que el pedido requiere |
+| `intent` | 0.26 | si el agente declara esa intención |
+| `tierFit` | 0.24 | distancia al escalón de potencia objetivo (penaliza quedarse corto **y** pasarse) |
+| `prior` | 0.12 | cómo le fue históricamente a ese agente con esa intención |
+| `cost` | 0.08 | penalización por costo relativo |
+
+Además cada agente puede **auto-vetarse** con `accepts()`. Así el agente reflex se
+excluye solo en cuanto aparece un pedido real, en vez de depender de un `if` en
+el router.
+
+Luego elige la forma de ejecución:
+
+- **`direct`** — un agente.
+- **`chain`** — planner → worker → crítico, y *cada eslabón entra solo si aporta*
+  (planificar un stack trace no sirve de nada: eso se diagnostica).
+- **`parallel`** — fan-out + sintetizador. `swarm` no se alcanza por umbral
+  escalar sino por regla explícita: el pedido tiene que ser **pesado Y múltiple**.
+  Un solo pedido, por difícil que sea, no gana nada con fan-out.
+
+En el fan-out cada agente tiene que aportar al menos una capacidad *requerida por
+el pedido* que no esté cubierta — sin esa condición el paralelo se llena de
+agentes irrelevantes.
+
+### 3. Agentes — `src/agents/`
+
+Un agente declara qué sabe hacer, cuánto cuesta y **hasta qué complejidad se
+anima** (`comfortMax`). Si el pedido lo supera, devuelve `escalate` en vez de
+entregar una respuesta pobre, y el orquestador lo vuelve a rutear más arriba.
+
+| Agente | Tier | Rol | Para qué |
+|---|---|---|---|
+| `reflex.smalltalk` | reflex | responder | saludos, gracias, despedidas — **sin LLM** |
+| `reflex.identity` | reflex | responder | "¿quién sos?" — describe el pool real |
+| `llm.quick` | light | responder | preguntas directas, traducciones cortas |
+| `llm.writer` | standard | worker | redacción, resúmenes, explicaciones |
+| `llm.coder` | standard | worker | escribir, explicar y refactorizar código |
+| `llm.analyst` | standard | worker | cálculos, métricas, costos |
+| `llm.tools` | standard | worker | acciones con efecto — pide confirmación |
+| `llm.debugger` | deep | worker | stack traces y causa raíz |
+| `llm.researcher` | deep | worker | comparaciones y trade-offs |
+| `llm.planner` | deep | planner | descompone en pasos accionables |
+| `llm.critic` | standard | critic | revisa el trabajo previo |
+| `llm.synthesizer` | standard | synthesizer | fusiona salidas paralelas |
+
+### 4. Executor — `src/runtime/`
+
+Ejecuta la estrategia con presupuesto (`maxCostUsd`, `maxMs`), bucle de escalado,
+tolerancia a fallos —si un agente del paralelo explota, la corrida sigue— y una
+**traza completa** de qué se decidió y por qué.
+
+Después de cada corrida el router recibe feedback y actualiza su memoria
+(EWMA por par intención↔agente, persistida en `.orchestati/memory.json`), así que
+el ruteo mejora con el uso.
+
+## Uso
+
+```bash
+pnpm install
+
+pnpm dev "hola"                       # ejecuta
+pnpm dev --explain "<pedido>"         # muestra análisis + decisión, sin ejecutar
+pnpm dev --trace "<pedido>"           # ejecuta e imprime la traza
+pnpm dev --json "<pedido>"            # salida estructurada
+pnpm dev                              # modo interactivo
+pnpm table                            # banco de calibración del ruteo
+pnpm test
+```
+
+Sin `AI_GATEWAY_API_KEY` el sistema usa `MockModel`: **el ruteo es real, las
+respuestas no**. Sirve para desarrollar y testear el orquestador entero sin gastar
+un peso. Con la key, las mismas decisiones pegan contra modelos de verdad vía
+Vercel AI Gateway (los modelos se configuran por env, ver `.env.example`).
+
+```ts
+import { Orchestrator } from 'orchestati';
+
+const o = new Orchestrator({ maxCostUsd: 0.25 });
+const res = await o.run('refactorizame este modulo');
+
+res.text;              // respuesta final
+res.decision.agents;   // quién la atendió
+res.decision.ranking;  // por qué ganó ese
+res.usage.costUsd;     // qué costó
+res.trace;             // qué pasó, paso a paso
+```
+
+## Agregar un agente
+
+No hay que tocar el router: se registra y entra a competir.
+
+```ts
+import { llmAgent, createDefaultRegistry, Orchestrator } from 'orchestati';
+
+const sql = llmAgent({
+  id: 'llm.sql',
+  name: 'SQL',
+  description: 'Escribe y optimiza consultas SQL.',
+  tier: 'standard',
+  capabilities: ['code', 'analysis'],
+  intents: ['code_generate', 'data_analysis'],
+  cost: 0.4,
+  comfortMax: 0.7,
+  system: 'Sos un experto en SQL…',
+  accepts: (s) => (/\b(select|join|query|sql)\b/.test(s.normalized) ? 0.5 : 0),
+});
+
+const registry = createDefaultRegistry().register(sql);
+const o = new Orchestrator({ registry });
+```
+
+Para un agente que no use LLM (API, base de datos, cálculo local), implementá la
+interfaz `Agent` directamente — `src/agents/reflex.ts` es el ejemplo.
+
+## Estado
+
+26 tests cubren el analizador, el ranking del router, el bucle de escalado, el
+corte por presupuesto y la tolerancia a fallos.
+
+Lo que todavía no está: herramientas ejecutables de verdad (hoy `llm.tools` sólo
+propone y pide confirmación), streaming, memoria conversacional más allá del
+historial en curso, y un clasificador por embeddings locales como segunda opinión
+para los casos donde el léxico queda corto (`confidence` bajo).

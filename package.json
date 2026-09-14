@@ -1,0 +1,31 @@
+{
+  "name": "orchestati",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Orquestador dinamico de agentes: analisis local del pedido -> seleccion de agente(s) -> ejecucion",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "orchestati": "./dist/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "table": "tsx src/dev/routing-table.ts"
+  },
+  "dependencies": {
+    "ai": "^6.0.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
