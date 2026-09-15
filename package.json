@@ -1,14 +1,55 @@
 {
   "name": "orchestati",
   "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "Orquestador dinamico de agentes: analisis local del pedido -> seleccion de agente(s) -> ejecucion",
-  "engines": {
-    "node": ">=20"
+  "description": "Dynamic agent orchestrator: analyzes every request locally (zero tokens) and routes it to the right agent, tier and strategy.",
+  "license": "MIT",
+  "author": "Javier D'Accorso",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/javierdac/orchestati.git"
   },
+  "homepage": "https://github.com/javierdac/orchestati#readme",
+  "bugs": {
+    "url": "https://github.com/javierdac/orchestati/issues"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "llm",
+    "orchestration",
+    "routing",
+    "agent-router",
+    "ai-sdk",
+    "typescript",
+    "cost-optimization",
+    "multi-agent"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README.es.md",
+    "LICENSE"
+  ],
   "bin": {
     "orchestati": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20.12"
   },
   "scripts": {
     "dev": "tsx src/cli.ts",
@@ -21,7 +62,9 @@
     "serve": "tsx src/server.ts",
     "smoke": "tsx src/dev/smoke.ts",
     "chat": "tsx src/dev/chat.ts",
-    "eval:routing": "tsx src/dev/eval-routing.ts"
+    "eval:routing": "tsx src/dev/eval-routing.ts",
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build",
+    "verify:package": "bash scripts/verify-package.sh"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.48",

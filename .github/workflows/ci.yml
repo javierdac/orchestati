@@ -33,6 +33,11 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # Los tests importan de src/ con rutas relativas, asi que no dicen nada
+      # sobre si el paquete publicado es consumible. Esto lo instala de verdad.
+      - name: Verificar el paquete publicable
+        run: pnpm verify:package
+
       # Informativo: deja los numeros en el log de cada corrida, para poder ver
       # cuando una regresion empezo aunque siga por encima del piso.
       - name: Evaluación

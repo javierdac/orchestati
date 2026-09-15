@@ -53,10 +53,27 @@ Real output from `pnpm table`, the repository's calibration bench. The lexicon i
 
 ## Quick start
 
+**Trying it out:**
+
 ```bash
 pnpm install
 pnpm chat        # interactive chat with live routing, tokens and cost
 ```
+
+**Putting it in your own project:**
+
+```bash
+npm install orchestati
+```
+
+```ts
+import { Orchestrator } from 'orchestati';
+
+const o = new Orchestrator({ maxCostUsd: 0.25 });
+const res = await o.run('refactor this payments module', { sessionId: user.id });
+```
+
+See **[INTEGRATION.md](INTEGRATION.md)** for the full guide — framework routes, domain agents, tools against your own systems, the confirmation gate wired to your UI, sessions in your database, cost control, and a production checklist.
 
 With no credentials the system runs on `MockModel`: **the routing is real, the answers are not.** That is enough to develop and test the entire orchestrator without spending anything.
 
@@ -421,7 +438,8 @@ Per-tier prices come from a table in `src/llm/openai-compatible.ts`. It feeds th
 | `pnpm eval` · `pnpm eval b` | classifier accuracy on each held-out set |
 | `pnpm eval:routing` | routing quality: tier accuracy and cost-error direction |
 | `pnpm smoke` | smoke test against the real API, one request per tier |
-| `pnpm test` | 131 tests |
+| `pnpm test` | the test suite |
+| `pnpm verify:package` | installs the built package in a temp project and checks it imports, types and runs |
 
 ---
 
@@ -460,6 +478,14 @@ pnpm typecheck
 ## Status
 
 What is not there yet: the ~20% of the evaluation sets the classifier still gets wrong, and tools executable from the server behind a real interactive gate (today the server deliberately stays read-only).
+
+## Documentation
+
+| | |
+|---|---|
+| [INTEGRATION.md](INTEGRATION.md) | putting Orchestati inside an existing application |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | working on Orchestati itself |
+| [README.es.md](README.es.md) | esta documentación en español |
 
 ## Contributing
 

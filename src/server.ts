@@ -2,7 +2,7 @@ import { loadEnv } from './core/env.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { Orchestrator, type OrchestratorOptions } from './runtime/orchestrator.js';
 import { FileSessionStore } from './runtime/session.js';
 import { FileRouterMemory } from './router/memory.js';
@@ -206,9 +206,14 @@ export function createOrchestatiServer(opts: ServerOptions = {}) {
   };
 }
 
-// Arranque directo: `pnpm serve`
+/**
+ * Arranque directo con `pnpm serve`.
+ *
+ * La comparacion es exacta a proposito: importar este modulo desde otro
+ * proyecto no debe levantar un servidor por su cuenta.
+ */
 const esteArchivo = fileURLToPath(import.meta.url);
-if (process.argv[1] && (process.argv[1] === esteArchivo || esteArchivo.startsWith(process.argv[1]))) {
+if (process.argv[1] && resolve(process.argv[1]) === esteArchivo) {
   const port = Number(process.env.PORT ?? 3000);
   const { createModelClient } = await import('./llm/model.js');
   const app = createOrchestatiServer({ port, model: await createModelClient() });
