@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadEnv } from './core/env.js';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { Orchestrator } from './runtime/orchestrator.js';
@@ -181,6 +182,7 @@ async function main(): Promise<void> {
   const args = argv.filter((a) => !a.startsWith('--'));
   const input = args.join(' ').trim();
 
+  loadEnv();
   const model = await createModelClient();
   const confirm = choosePolicy(flags);
   const orchestrator = new Orchestrator({

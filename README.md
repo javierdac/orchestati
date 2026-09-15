@@ -360,8 +360,10 @@ pnpm test
 Sin credenciales el sistema usa `MockModel`: **el ruteo es real, las respuestas
 no**. Sirve para desarrollar y testear el orquestador entero sin gastar un peso.
 
-Para pegarle a modelos de verdad alcanza con exportar una key — el resto lo
-resuelve solo (`.env.example` tiene todas las opciones):
+Para pegarle a modelos de verdad, copiá `.env.example` a `.env` y poné una key.
+Los puntos de entrada lo cargan solos, así que no hace falta exportar nada ni
+acordarse de la sintaxis de tu shell (`export` en bash, `set -x` en fish). Lo que
+ya esté en el entorno gana: un `.env` no pisa una variable exportada a propósito.
 
 | Backend | Variable | Nota |
 |---|---|---|

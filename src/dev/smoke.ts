@@ -4,6 +4,7 @@
  * Recorre un pedido por tier y reporta modelo, costo y latencia reales. Es la
  * prueba de que las decisiones que se toman offline sobreviven al mundo.
  */
+import { loadEnv } from '../core/env.js';
 import { Orchestrator } from '../runtime/orchestrator.js';
 import { createModelClient } from '../llm/model.js';
 import { allowAll, autoSafe } from '../tools/confirm.js';
@@ -31,6 +32,7 @@ const C = {
   red: (s: string) => `\x1b[31m${s}\x1b[0m`,
 };
 
+loadEnv();
 const model = await createModelClient();
 if (model.kind === 'mock') {
   console.error(

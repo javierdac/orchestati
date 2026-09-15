@@ -5,6 +5,7 @@
  * agente lo atendio, que herramientas uso, cuantos tokens costo y cuanto
  * lleva gastado la sesion.
  */
+import { loadEnv } from '../core/env.js';
 import { createInterface } from 'node:readline';
 import { stdin, stdout } from 'node:process';
 import { Orchestrator } from '../runtime/orchestrator.js';
@@ -209,6 +210,7 @@ async function confirmar(req: ConfirmationRequest): Promise<boolean> {
   return r === 's' || r === 'si' || r === 'y';
 }
 
+const envCargado = loadEnv();
 const model = await createModelClient();
 const contador = new Contador();
 
@@ -225,6 +227,7 @@ const preset = isPresetName(model.kind) ? PRESETS[model.kind] : undefined;
 console.log(`\n${C.bold('Orchestati')} ${C.dim('· chat de ejemplo')}`);
 console.log(C.dim('El ruteo es local y no gasta tokens. Lo que ves cobrado es solo lo que el agente elegido consumio.\n'));
 console.log(`  backend   ${C.bold(preset?.label ?? model.kind)}`);
+if (envCargado) console.log(C.dim(`  env       ${envCargado.replace(process.cwd() + '/', '')}`));
 if (preset) {
   for (const tier of ['light', 'standard', 'deep', 'swarm'] as const) {
     const tinte = TINTE[tier] ?? C.cyan;

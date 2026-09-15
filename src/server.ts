@@ -1,3 +1,4 @@
+import { loadEnv } from './core/env.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -53,6 +54,7 @@ function sse(res: ServerResponse, event: OrchestrationEvent): void {
 }
 
 export function createOrchestatiServer(opts: ServerOptions = {}) {
+  loadEnv();
   const orchestrator = new Orchestrator({
     confirm: opts.confirm ?? autoSafe(),
     sessions: opts.sessions ?? new FileSessionStore(),
