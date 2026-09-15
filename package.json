@@ -19,7 +19,8 @@
     "table": "tsx src/dev/routing-table.ts",
     "eval": "tsx src/dev/eval.ts",
     "serve": "tsx src/server.ts",
-    "smoke": "tsx src/dev/smoke.ts"
+    "smoke": "tsx src/dev/smoke.ts",
+    "chat": "tsx src/dev/chat.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.48",

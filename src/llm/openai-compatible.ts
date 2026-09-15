@@ -19,11 +19,49 @@ export interface EndpointPreset {
   models: Record<LlmTier, string>;
   /** USD por millon de tokens, cuando se conocen. */
   pricing?: Record<string, { in: number; out: number }>;
+  /**
+   * Tarifa a asumir para un modelo que no esta en `pricing`. En un proveedor
+   * pago, costo 0 desactivaria el corte por presupuesto sin avisar: mejor
+   * asumir caro y que corte de mas.
+   */
+  fallbackPricing?: { in: number; out: number };
+  /**
+   * Modelos que rechazan `temperature` distinta de 1 (los de razonamiento).
+   * Mandarsela igual es un 400, asi que se omite para esos.
+   */
+  omitTemperature?: RegExp;
   /** Corre en la maquina: sin costo y sin red. */
   local?: boolean;
 }
 
 export const PRESETS = {
+  openai: {
+    label: 'OpenAI',
+    baseURL: 'https://api.openai.com/v1',
+    keyEnv: ['OPENAI_API_KEY'],
+    // Por defecto la familia 4.1: es barata y respeta `temperature`, que es
+    // como los agentes se diferencian entre si. La familia gpt-5 se puede
+    // pedir por entorno y se maneja sola (ver `omitTemperature`).
+    models: {
+      light: 'gpt-4.1-nano',
+      standard: 'gpt-4.1-mini',
+      deep: 'gpt-4.1',
+      swarm: 'gpt-4.1-mini',
+    },
+    // USD por millon de tokens. Aproximado, referencia 2026-09.
+    pricing: {
+      'gpt-4.1-nano': { in: 0.1, out: 0.4 },
+      'gpt-4.1-mini': { in: 0.4, out: 1.6 },
+      'gpt-4.1': { in: 2, out: 8 },
+      'gpt-4o-mini': { in: 0.15, out: 0.6 },
+      'gpt-4o': { in: 2.5, out: 10 },
+      'gpt-5-nano': { in: 0.05, out: 0.4 },
+      'gpt-5-mini': { in: 0.25, out: 2 },
+      'gpt-5': { in: 1.25, out: 10 },
+    },
+    fallbackPricing: { in: 5, out: 20 },
+    omitTemperature: /^(gpt-5|o[134])/,
+  },
   gemini: {
     label: 'Gemini (nivel gratuito, via endpoint compatible con OpenAI)',
     baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
@@ -110,15 +148,20 @@ export class OpenAICompatibleModel extends AiSdkModel {
   protected resolveModel(tier: LlmTier): ResolvedModel {
     if (!this.provider) throw new Error(`${this.name}: falta llamar a init()`);
     const id = modelForTierIn(this.preset, tier);
-    return { id: `${this.name}:${id}`, model: this.provider(id) };
+    return {
+      id: `${this.name}:${id}`,
+      model: this.provider(id),
+      // Los modelos de razonamiento tiran 400 si les mandas temperature.
+      omitTemperature: this.preset.omitTemperature?.test(id) ?? false,
+    };
   }
 
   protected costOf(id: string, inputTokens: number, outputTokens: number): number {
     if (this.preset.local) return 0;
     const bare = id.slice(this.name.length + 1);
-    const p = this.preset.pricing?.[bare];
-    // Sin tarifa conocida no se inventa un numero: el corte por presupuesto no
-    // puede basarse en una cifra imaginaria.
+    const p = this.preset.pricing?.[bare] ?? this.preset.fallbackPricing;
+    // Sin tarifa conocida se asume cara: en un proveedor pago, costo 0
+    // desactivaria el corte por presupuesto sin avisar.
     return p ? (inputTokens * p.in + outputTokens * p.out) / 1_000_000 : 0;
   }
 

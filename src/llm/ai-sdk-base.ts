@@ -16,6 +16,8 @@ export interface ResolvedModel {
   id: string;
   /** Lo que se le pasa al AI SDK: un string o un LanguageModel. */
   model: unknown;
+  /** El modelo rechaza `temperature`: no se la mandamos. */
+  omitTemperature?: boolean;
 }
 
 export abstract class AiSdkModel implements ModelClient {
@@ -29,10 +31,11 @@ export abstract class AiSdkModel implements ModelClient {
 
   async generate(req: ModelRequest): Promise<ModelResponse> {
     const started = Date.now();
-    const { id, model } = this.resolveModel(req.tier);
+    const resolved = this.resolveModel(req.tier);
+    const { id } = resolved;
     const { generateText } = await import('ai');
 
-    const res = await generateText(this.params(req, model) as never);
+    const res = await generateText(this.params(req, resolved) as never);
 
     return this.toResponse({
       id,
@@ -45,10 +48,11 @@ export abstract class AiSdkModel implements ModelClient {
 
   async generateStream(req: ModelRequest, onDelta: (delta: string) => void): Promise<ModelResponse> {
     const started = Date.now();
-    const { id, model } = this.resolveModel(req.tier);
+    const resolved = this.resolveModel(req.tier);
+    const { id } = resolved;
     const { streamText } = await import('ai');
 
-    const result = streamText(this.params(req, model) as never);
+    const result = streamText(this.params(req, resolved) as never);
     for await (const delta of result.textStream) onDelta(delta);
 
     const [text, usage, rawCalls] = await Promise.all([result.text, result.usage, result.toolCalls]);
@@ -57,15 +61,16 @@ export abstract class AiSdkModel implements ModelClient {
 
   // -------------------------------------------------------------------------
 
-  private params(req: ModelRequest, model: unknown): Record<string, unknown> {
+  private params(req: ModelRequest, resolved: ResolvedModel): Record<string, unknown> {
     const tools = buildTools(req);
+    const mandaTemperature = req.temperature !== undefined && !resolved.omitTemperature;
     return {
-      model,
+      model: resolved.model,
       ...(req.system ? { system: req.system } : {}),
       messages: buildMessages(req),
       ...(tools ? { tools } : {}),
       ...(req.maxOutputTokens ? { maxOutputTokens: req.maxOutputTokens } : {}),
-      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+      ...(mandaTemperature ? { temperature: req.temperature } : {}),
       ...(req.signal ? { abortSignal: req.signal } : {}),
     };
   }

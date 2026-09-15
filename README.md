@@ -254,7 +254,40 @@ Después de cada corrida el router recibe feedback y actualiza su memoria
 (EWMA por par intención↔agente, persistida en `.orchestati/memory.json`), así que
 el ruteo mejora con el uso.
 
-### 7. Streaming, sesiones y servidor
+### 7. El chat de ejemplo — `pnpm chat`
+
+Un chat que muestra lo que un chat normal esconde: por dónde ruteó cada pedido,
+qué agente lo atendió, qué herramientas usó, cuántos tokens costó y **cuánto
+lleva gastado la sesión**.
+
+`/ejemplos` lista un pedido por camino (podés correrlos con `/1` … `/11`) y
+`/costo` imprime el acumulado. Una sesión real contra `gpt-4.1`:
+
+```
+  Consumo de la sesion
+  3 mensaje(s) · 759 entrada + 86 salida = 845 tokens · $0.00036
+
+  por escalon
+    reflex     1 msg       0 tok         $0   0%
+    light      1 msg     183 tok   $0.00003   8%
+    standard   1 msg     662 tok   $0.00033  92%
+
+  por agente
+    llm.analyst         1×     662 tok   $0.00033
+    llm.quick           1×     183 tok   $0.00003
+    reflex.smalltalk    1×       0 tok         $0
+
+  herramientas  calculator×1
+
+  2 de 3 pedido(s) no necesitaron el escalon caro
+  1 se resolvio sin llamar a ningun modelo
+```
+
+Ese desglose es la tesis del proyecto medida en plata: el saludo salió gratis, la
+pregunta simple costó tres centésimas de milésimo, y el 92% del gasto se lo llevó
+el único pedido que realmente lo necesitaba.
+
+### 8. Streaming, sesiones y servidor
 
 **El streaming acá no es sólo texto token a token.** Una UI necesita saber *qué
 agente* está trabajando, qué herramienta corrió y cuándo el sistema decidió
@@ -318,6 +351,7 @@ pnpm dev --no-session "<pedido>"      # sin historial de conversación
 pnpm dev                              # modo interactivo (pregunta cada acción)
 pnpm serve                            # servidor HTTP + SSE + UI de demo
 pnpm table                            # banco de calibración del ruteo
+pnpm chat                             # chat de ejemplo: ruteo, tokens y costo en vivo
 pnpm eval                             # accuracy del clasificador (set A)
 pnpm eval b                           # ídem sobre el set de control
 pnpm test
@@ -331,6 +365,7 @@ resuelve solo (`.env.example` tiene todas las opciones):
 
 | Backend | Variable | Nota |
 |---|---|---|
+| OpenAI | `OPENAI_API_KEY` | familia `gpt-4.1` por defecto |
 | **Gemini** | `GEMINI_API_KEY` | tiene nivel gratuito; se usa vía su endpoint compatible con OpenAI |
 | **Groq** | `GROQ_API_KEY` | nivel gratuito, corre modelos de pesos abiertos |
 | OpenRouter | `OPENROUTER_API_KEY` | |
