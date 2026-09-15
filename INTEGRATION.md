@@ -23,6 +23,62 @@ import { createOrchestatiServer } from 'orchestati/server';   // optional
 
 ---
 
+## Already using the AI SDK? Change one line
+
+If your code already calls `generateText` or `streamText`, the adapter makes Orchestati a drop-in model. Everything downstream keeps working — you still get text, tokens and streaming — but the request now goes through the analyzer, the router and whichever agent fits.
+
+```ts
+import { generateText } from 'ai';
+import { Orchestrator, orchestatiModel } from 'orchestati';
+
+const model = orchestatiModel(new Orchestrator({ maxCostUsd: 0.25 }));
+
+const { text, usage, providerMetadata } = await generateText({ model, prompt: userMessage });
+
+providerMetadata.orchestati;
+// { runId, tier, strategy, agents, intent, complexity, confidence, costUsd, escalations, toolCalls }
+```
+
+Real output against OpenAI, same `model` object for all three:
+
+```
+generateText  "hola"
+   → reflex · reflex.smalltalk · $0.00000 · 0+0 tokens
+   ¡Hola! ¿En qué te doy una mano?
+
+generateText  "que es un closure en javascript, en una oracion"
+   → light · llm.quick · $0.00003 · 135+33 tokens
+
+streamText    "cuanto es (2340 * 15) / 100"
+   → standard · llm.analyst · tools: [{ calculator, approved, ok }]
+```
+
+The first one is a `generateText` call that cost nothing and consumed no tokens, because the orchestrator answered it without a model. That is the whole point, and your calling code did not change.
+
+Streaming works the same way:
+
+```ts
+import { streamText } from 'ai';
+
+const res = streamText({ model, prompt: userMessage });
+for await (const chunk of res.textStream) process.stdout.write(chunk);
+const meta = (await res.providerMetadata)?.orchestati;
+```
+
+**Two things to know.** Tools passed through the SDK are not used — Orchestati manages its own per agent, with its own confirmation gate — and you get an explicit `warnings` entry saying so rather than silence. Same for `responseFormat`: which agent answers is decided at runtime, so a structured-output contract cannot be guaranteed up front.
+
+Options:
+
+```ts
+orchestatiModel(orchestrator, {
+  sessionId: user.id,     // conversation memory handled by the orchestrator
+  maxCostUsd: 0.1,        // per-call budget
+  modelId: 'my-router',   // what shows up in your telemetry
+});
+```
+
+---
+
 ## Pick the integration depth
 
 The three levels are independent — you can stop at any of them.

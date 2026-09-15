@@ -73,6 +73,17 @@ const o = new Orchestrator({ maxCostUsd: 0.25 });
 const res = await o.run('refactor this payments module', { sessionId: user.id });
 ```
 
+Already using the AI SDK? It is a drop-in model:
+
+```ts
+import { generateText } from 'ai';
+import { Orchestrator, orchestatiModel } from 'orchestati';
+
+const model = orchestatiModel(new Orchestrator());
+const { text, providerMetadata } = await generateText({ model, prompt: userMessage });
+providerMetadata.orchestati.tier;   // 'reflex' — that call cost $0 and 0 tokens
+```
+
 See **[INTEGRATION.md](INTEGRATION.md)** for the full guide — framework routes, domain agents, tools against your own systems, the confirmation gate wired to your UI, sessions in your database, cost control, and a production checklist.
 
 With no credentials the system runs on `MockModel`: **the routing is real, the answers are not.** That is enough to develop and test the entire orchestrator without spending anything.

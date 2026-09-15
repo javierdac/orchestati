@@ -17,7 +17,7 @@ mv "$TARBALL" "$TMP/"
 
 cd "$TMP"
 echo '{"name":"verify","private":true,"type":"module","version":"1.0.0"}' > package.json
-npm install "./$TARBALL" typescript --silent
+npm install "./$TARBALL" typescript ai --silent
 
 cat > uso.ts <<'TS'
 import { Orchestrator, MockModel, ToolRegistry, calculatorTool, askUser, Router, AgentRegistry, llmAgent, analyze } from 'orchestati';
@@ -61,8 +61,9 @@ TS
 npx tsc --noEmit --module nodenext --moduleResolution nodenext --target es2022 --strict uso.ts
 
 cat > uso.mjs <<'JS'
-import { Orchestrator, MockModel, analyze } from 'orchestati';
+import { Orchestrator, MockModel, analyze, orchestatiModel } from 'orchestati';
 import { createOrchestatiServer } from 'orchestati/server';
+import { generateText } from 'ai';
 
 const o = new Orchestrator({ model: new MockModel() });
 if (analyze('hola').primaryIntent !== 'greeting') throw new Error('analyze roto');
@@ -73,6 +74,11 @@ if (!res.id || !res.text) throw new Error('run roto');
 let n = 0;
 for await (const _ of o.stream('hola')) n++;
 if (n < 3) throw new Error('stream roto');
+
+// El adaptador tiene que funcionar como modelo del AI SDK.
+const sdk = await generateText({ model: orchestatiModel(new Orchestrator({ model: new MockModel() })), prompt: 'hola' });
+if (!sdk.text) throw new Error('adaptador roto');
+if (sdk.providerMetadata?.orchestati?.tier !== 'reflex') throw new Error('metadata de ruteo rota');
 
 // Importar el servidor no debe levantarlo.
 const app = createOrchestatiServer({ model: new MockModel() });

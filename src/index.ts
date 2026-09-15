@@ -14,6 +14,7 @@ export * from './runtime/trace.js';
 export * from './runtime/session.js';
 export * from './runtime/outcome.js';
 export * from './llm/model.js';
+export * from './llm/ai-sdk-adapter.js';
 export * from './tools/index.js';
 export * from './runtime/tool-loop.js';
 export * from './agents/index.js';

@@ -11,6 +11,12 @@ importers:
       '@ai-sdk/openai-compatible':
         specifier: ^3.0.48
         version: 3.0.48(zod@3.25.76)
+      '@ai-sdk/provider':
+        specifier: 4.0.14
+        version: 4.0.14
+      '@types/json-schema':
+        specifier: ^7.0.15
+        version: 7.0.15
       ai:
         specifier: ^7.0.101
         version: 7.0.101(zod@3.25.76)
@@ -502,6 +508,9 @@ packages:
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
+
+  '@types/json-schema@7.0.15':
+    resolution: {integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==}
 
   '@types/node@22.20.2':
     resolution: {integrity: sha512-xlvWf4Vs9n1PEVYwP1n4vvG07M6y8WgvJ2t0vbrWTmijsIHp1cS+uJ2kMIRdY3nHZK0nCYKrPeD171+SzF4/zw==}
@@ -1017,6 +1026,8 @@ snapshots:
   '@standard-schema/spec@1.1.0': {}
 
   '@types/estree@1.0.9': {}
+
+  '@types/json-schema@7.0.15': {}
 
   '@types/node@22.20.2':
     dependencies:
