@@ -254,8 +254,36 @@ async function barrer(spec: string | undefined): Promise<void> {
     return aptos.length > 0 ? aptos : proponibles;
   };
 
+  /**
+   * Si un escalon puede realmente atenderse con ese modelo.
+   *
+   * No es lo mismo "mas lento" que "no funciona": una peticion cuya salida
+   * esperada supera el limite por minuto se rechaza entera, y reintentarla no
+   * cambia nada. Una config asi no es barata, es inviable.
+   */
+  const viabilidadDe = (tier: LlmTier, spec: string): { ok: boolean; motivo?: string } => {
+    const lim = limitsOf(spec, base);
+    const pedidosDelTier = perfil.pedidos.filter((x) => x.porTier[tier]);
+    if (!lim?.otpm || pedidosDelTier.length === 0) return { ok: true };
+
+    const salidaMaxima = Math.max(...pedidosDelTier.map((x) => x.porTier[tier]!.outputTokens));
+    if (salidaMaxima > lim.otpm) {
+      return {
+        ok: false,
+        motivo:
+          `el pedido mas grande genera ${salidaMaxima} tokens de salida y el limite es ` +
+          `${lim.otpm.toLocaleString()}/min. Se rechaza entero, reintentar no ayuda.`,
+      };
+    }
+    return { ok: true };
+  };
+
+  const configViable = (config: Config): boolean =>
+    TIERS.every((t) => !config[t] || viabilidadDe(t, config[t]!).ok);
+
   const masBarato = (tier: LlmTier): string =>
     aptosPara(tier)
+      .filter((c) => viabilidadDe(tier, c.spec).ok)
       .map((c) => ({
         spec: c.spec,
         costo: costoDe(perfil, { [tier]: c.spec }, base).total,
@@ -322,21 +350,51 @@ async function barrer(spec: string | undefined): Promise<void> {
       const spec = p.config[tier];
       if (!spec) continue;
       const lim = limitsOf(spec, base);
-      if (!lim?.tpm) continue;
+      if (!lim) continue;
 
-      // Tokens que ese escalon consumio en el perfil, por pedido.
       const pedidosDelTier = perfil.pedidos.filter((x) => x.porTier[tier]);
       if (pedidosDelTier.length === 0) continue;
-      const porPedido =
+
+      /**
+       * El limite de salida se aplica por peticion, asi que lo que importa es
+       * el pedido mas grande, no el promedio: si uno solo lo supera, ese se
+       * rechaza entero.
+       */
+      const salidaMaxima = Math.max(...pedidosDelTier.map((x) => x.porTier[tier]!.outputTokens));
+      const totalMedio =
         pedidosDelTier.reduce((a, x) => a + x.porTier[tier]!.inputTokens + x.porTier[tier]!.outputTokens, 0) /
         pedidosDelTier.length;
-      const pedidosPorMinuto = Math.floor(lim.tpm / Math.max(1, porPedido));
 
-      log(
-        C.yellow(
-          `      ⚠ ${spec}: ${lim.tpm.toLocaleString()} tok/min ≈ ${pedidosPorMinuto} pedido(s) de ${tier} por minuto`,
-        ),
-      );
+      /**
+       * El limite de salida por minuto no hace la configuracion lenta: la hace
+       * imposible. Una peticion cuya salida esperada lo supera se rechaza
+       * entera, y reintentarla no cambia nada.
+       */
+      const v = viabilidadDe(tier, spec);
+      if (!v.ok) {
+        log(C.red(`      ✗ ${spec} NO SIRVE para ${tier}: ${v.motivo}`));
+        continue;
+      }
+      // Ojo: esta salida se midio con los modelos del perfil. Un modelo de
+      // razonamiento genera mucho mas —3x medido—, asi que un margen que
+      // parece holgado puede no serlo.
+      if (lim.otpm && salidaMaxima / lim.otpm > 0.33) {
+        log(
+          C.yellow(
+            `      ⚠ ${spec}: limite de ${lim.otpm.toLocaleString()} tokens de salida/min y el pedido mas ` +
+              `grande ya usa ${salidaMaxima}. Un modelo de razonamiento genera ~3x mas y no entraria.`,
+          ),
+        );
+      }
+
+      if (lim.tpm) {
+        const porMinuto = Math.floor(lim.tpm / Math.max(1, totalMedio));
+        log(
+          C.yellow(
+            `      ⚠ ${spec}: ${lim.tpm.toLocaleString()} tok/min ≈ ${porMinuto} pedido(s) de ${tier} por minuto`,
+          ),
+        );
+      }
     }
   }
 
@@ -355,7 +413,8 @@ async function barrer(spec: string | undefined): Promise<void> {
    * Se propone el cambio de mayor palanca, no el mas barato. Lo mas barato en
    * todo suele ser tambien lo mas riesgoso, y este barrido no mide calidad.
    */
-  const recomendada = propuestas.find((p) => p.etiqueta.startsWith('solo cambiar')) ?? propuestas[1];
+  const viables = propuestas.filter((p) => configViable(p.config));
+  const recomendada = viables.find((p) => p.etiqueta.startsWith('solo cambiar')) ?? viables[1] ?? viables[0];
 
   if (json) {
     console.log(

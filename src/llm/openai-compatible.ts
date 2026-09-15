@@ -14,6 +14,14 @@ export interface ModelLimits {
   rpm?: number;
   /** Tokens por minuto. Suele ser el que ata primero. */
   tpm?: number;
+  /**
+   * Tokens de SALIDA por minuto.
+   *
+   * Groq lo aplica y no lo publica en su tabla de limites: una peticion cuya
+   * salida esperada lo supera se rechaza entera, y reintentarla no sirve.
+   * Es el limite que decide si un escalon es viable con ese proveedor.
+   */
+  otpm?: number;
   /** Peticiones por dia. */
   rpd?: number;
   /** Tokens por dia. */
@@ -117,9 +125,10 @@ export const PRESETS = {
     fallbackPricing: { in: 0.5, out: 1 },
     // Limites del nivel gratuito, leidos de la consola de Groq (2026-09).
     limits: {
-      'openai/gpt-oss-120b': { rpm: 30, tpm: 8_000, rpd: 1_000, tpd: 200_000 },
-      'openai/gpt-oss-20b': { rpm: 30, tpm: 8_000, rpd: 1_000, tpd: 200_000 },
-      'qwen/qwen3.8-27b': { rpm: 30, tpm: 8_000, rpd: 1_000, tpd: 200_000 },
+      // El otpm de 1000 no figura en la consola: salio del mensaje de error.
+      'openai/gpt-oss-120b': { rpm: 30, tpm: 8_000, otpm: 1_000, rpd: 1_000, tpd: 200_000 },
+      'openai/gpt-oss-20b': { rpm: 30, tpm: 8_000, otpm: 1_000, rpd: 1_000, tpd: 200_000 },
+      'qwen/qwen3.8-27b': { rpm: 30, tpm: 8_000, otpm: 1_000, rpd: 1_000, tpd: 200_000 },
       'groq/compound': { rpm: 30, tpm: 70_000, rpd: 250 },
       'allam-2-7b': { rpm: 30, tpm: 6_000, rpd: 7_000, tpd: 500_000 },
     },

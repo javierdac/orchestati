@@ -24,9 +24,33 @@ export interface RetryOptions {
 
 const RETRIABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 
+/** Encabezados de la respuesta, vengan con el nombre que vengan. */
+function headersOf(err: unknown): Record<string, string> | undefined {
+  const e = err as { responseHeaders?: Record<string, string>; headers?: Record<string, string> };
+  return e.responseHeaders ?? e.headers;
+}
+
+/**
+ * Limites que no se arreglan esperando.
+ *
+ * Un 429 por "demasiadas peticiones" pasa solo; uno por "esta peticion es
+ * mas grande que el limite" no: la misma peticion va a fallar siempre. El
+ * proveedor lo dice de dos formas y conviene escuchar las dos.
+ */
+function esRechazoPermanente(err: unknown): boolean {
+  if (headersOf(err)?.['x-should-retry'] === 'false') return true;
+  const msg = ((err as { message?: string }).message ?? '').toLowerCase();
+  return /request too large|reduce max_?tokens|exceed the enforced limit|context length/.test(msg);
+}
+
 /** Errores de red y respuestas que vale la pena reintentar. */
 export function isRetriable(err: unknown): boolean {
   if (err instanceof Error && err.name === 'AbortError') return false;
+
+  // Antes que nada: si el proveedor avisa que reintentar no sirve, no se
+  // reintenta. Repetir una peticion que excede un limite por tamaño solo
+  // gasta tiempo y cuota.
+  if (esRechazoPermanente(err)) return false;
 
   const e = err as { statusCode?: number; status?: number; code?: string; message?: string };
   const status = e.statusCode ?? e.status;
@@ -45,8 +69,7 @@ export function isRetriable(err: unknown): boolean {
 
 /** Espera que el proveedor pidio explicitamente, si la mando. */
 function retryAfterMs(err: unknown): number | undefined {
-  const e = err as { responseHeaders?: Record<string, string>; headers?: Record<string, string> };
-  const headers = e.responseHeaders ?? e.headers;
+  const headers = headersOf(err);
   const raw = headers?.['retry-after'] ?? headers?.['Retry-After'];
   if (!raw) return undefined;
   const segundos = Number(raw);

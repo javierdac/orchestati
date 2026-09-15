@@ -102,3 +102,25 @@ describe('withRetry', () => {
     expect(Date.now() - t0).toBeLessThan(1000);
   });
 });
+
+describe('rechazos que no se arreglan esperando', () => {
+  it('honra el x-should-retry del proveedor', () => {
+    expect(isRetriable({ statusCode: 429, responseHeaders: { 'x-should-retry': 'false' } })).toBe(false);
+    expect(isRetriable({ statusCode: 429, responseHeaders: { 'x-should-retry': 'true' } })).toBe(true);
+  });
+
+  it('no reintenta un limite por tamaño de la peticion', () => {
+    // Un 429 por "demasiadas peticiones" pasa solo; uno por "esta petición es
+    // más grande que el límite" va a fallar igual las veces que se repita.
+    const err = {
+      statusCode: 429,
+      message:
+        'Request too large for model `qwen/qwen3.8-27b` on output tokens per minute (OTPM): Limit 1000, Requested 1381. reduce max_tokens',
+    };
+    expect(isRetriable(err)).toBe(false);
+  });
+
+  it('sigue reintentando un rate limit normal', () => {
+    expect(isRetriable({ statusCode: 429, message: 'Rate limit reached, please try again' })).toBe(true);
+  });
+});
