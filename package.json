@@ -20,7 +20,8 @@
     "eval": "tsx src/dev/eval.ts",
     "serve": "tsx src/server.ts",
     "smoke": "tsx src/dev/smoke.ts",
-    "chat": "tsx src/dev/chat.ts"
+    "chat": "tsx src/dev/chat.ts",
+    "eval:routing": "tsx src/dev/eval-routing.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.48",

@@ -8,7 +8,12 @@ import type { Intent } from '../core/types.js';
  */
 export interface RouterMemory {
   prior(intent: Intent, agentId: string): number;
-  record(intent: Intent, agentId: string, outcome: number): void;
+  /**
+   * @param outcome 0..1
+   * @param weight  cuanto confiar en esta señal (0..1). Una observacion pasiva
+   *                mueve poco; lo que dice el usuario mueve entero.
+   */
+  record(intent: Intent, agentId: string, outcome: number, weight?: number): void;
   snapshot(): Record<string, { score: number; n: number }>;
 }
 
@@ -30,14 +35,19 @@ export class InMemoryRouterMemory implements RouterMemory {
     return DEFAULT_PRIOR * (1 - trust) + e.score * trust;
   }
 
-  record(intent: Intent, agentId: string, outcome: number): void {
+  record(intent: Intent, agentId: string, outcome: number, weight = 1): void {
     const k = this.key(intent, agentId);
     const e = this.store.get(k);
     const clamped = Math.min(1, Math.max(0, outcome));
+    const alpha = ALPHA * Math.min(1, Math.max(0, weight));
+    if (alpha === 0) return;
+
     if (!e) {
-      this.store.set(k, { score: clamped, n: 1 });
+      // Una primera señal debil no debe fijar el prior de una: se mezcla con
+      // el neutro en proporcion a cuanto se le cree.
+      this.store.set(k, { score: DEFAULT_PRIOR * (1 - weight) + clamped * weight, n: 1 });
     } else {
-      e.score = e.score * (1 - ALPHA) + clamped * ALPHA;
+      e.score = e.score * (1 - alpha) + clamped * alpha;
       e.n += 1;
     }
   }
@@ -72,8 +82,8 @@ export class FileRouterMemory extends InMemoryRouterMemory {
     }
   }
 
-  override record(intent: Intent, agentId: string, outcome: number): void {
-    super.record(intent, agentId, outcome);
+  override record(intent: Intent, agentId: string, outcome: number, weight = 1): void {
+    super.record(intent, agentId, outcome, weight);
     this.save();
   }
 }

@@ -33,6 +33,16 @@ pnpm table
 
 It prints how a fixed set of requests is routed. It is the fastest way to see whether a change to the weights, the thresholds or the lexicon quietly broke routing somewhere you were not looking. A single row moving is often correct; several rows moving usually means the change was broader than intended. Mention in your PR which rows changed and why.
 
+### If you touched the analyzer, the router or anything that affects routing
+
+```bash
+pnpm eval:routing
+```
+
+This measures the *product*, not a component. Two numbers matter beyond the headline accuracy: **over-routed** (requests sent to a more expensive tier than needed — wasted money) and **under-routed** (sent cheaper than needed — risked quality). A test enforces that over-routing stays at zero, because the bias has to sit on the side the system promises.
+
+The routing set is labeled with an expected tier *and* a reason (`why`). If you disagree with a label, argue with the reason rather than changing the label to make your change pass.
+
 ### If you touched the semantic classifier or the prototypes
 
 Run both evaluation sets:

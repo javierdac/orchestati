@@ -166,6 +166,23 @@ Every prediction carries its nearest prototype as evidence (`≈ "let's draw up 
 
 **Two evaluation sets, and the second is the one that matters.** Measuring repeatedly against the same held-out set wears it out: every adjustment you make while looking at its errors turns it, bit by bit, into a training set. Set B was written *before* the prototypes were expanded and without looking at set A's failures. When coverage was expanded, A gained 8 points and **B, never inspected, gained 18** — so the improvement generalizes rather than overfitting. A test also asserts that no evaluation phrase appears verbatim among the prototypes.
 
+#### Measuring the routing itself
+
+Intent accuracy measures a *component*. The routing decision is the *product*, and it used to be judged by eyeballing a table. `pnpm eval:routing` measures it against 33 labeled cases — requests that are not the ones the thresholds were calibrated against:
+
+```
+  exact tier          93.9%  (31/33)
+  tier within ±1     100.0%  (33/33)
+  expected agent      93.3%  (28/30)
+
+  over-routed         0   wastes money
+  under-routed        2   risks answer quality
+```
+
+**The two error directions do not cost the same**, so they are reported separately: routing more expensively than needed wastes money, routing more cheaply risks the answer. Tests enforce that over-routing stays at zero — the bias has to sit on the side the system actually promises.
+
+That split is what made the first measurement useful. At 84.8%, every single failure was an under-route, and they clustered on one pattern: English debugging symptoms with no stack trace (*times out*, *memory leak*, *race condition*). The lexicon's debug vocabulary leaned on the word "error". Adding symptom vocabulary took it to 93.9% — and the untouched control set for intent classification rose from 79.5% to 84.6%, which is what tells you the fix generalized instead of just fitting the routing set.
+
 #### Uncertainty propagates
 
 This is what changed the design most. A classifier that is right 74% of the time **is wrong 26% of the time**, and the system has to know it. Confidence now travels all the way down:
@@ -262,7 +279,18 @@ $ pnpm dev --yes "run the project tests with pnpm test"
 
 Runs the strategy with a budget (`maxCostUsd`, `maxMs`), an escalation loop, fault tolerance — if one agent in a parallel branch blows up, the run continues — and a **complete trace** of what was decided and why.
 
-After every run the router receives feedback and updates its memory (an EWMA per intent↔agent pair, persisted to `.orchestati/memory.json`), so routing improves with use.
+After every run the router receives feedback and updates its memory — an EWMA per intent↔agent pair, persisted to `.orchestati/memory.json`.
+
+**What it learns from matters more than the mechanism.** An earlier version fed the router the agent's own self-reported confidence, which was computed from the request's complexity and the agent's `comfortMax` — both known *before* the agent ran. The router was learning from its own prior decision: a closed loop with no external signal, which cannot converge on anything. Feedback now comes from facts that could only be known afterwards, weighted by how much they are worth:
+
+| Signal | Weight | What it tells you |
+|---|---|---|
+| The run finished without incident | 0.25 | very little — a mediocre answer and an excellent one look identical from outside |
+| Something concrete happened (escalation, error, a tool failed) | 0.6 | the run went badly |
+| The user rephrased the same request | 0.7 | the previous answer did not solve it |
+| The user rated it (`recordFeedback`) | 1.0 | the only signal that speaks to quality |
+
+The rephrasing signal reuses the n-gram vectorizer: if a new request in a session is very similar to the previous one, the agent that answered it is penalized. In `pnpm chat`, `/good` and `/bad` rate the last answer.
 
 ### 7. Streaming, sessions and server
 
@@ -391,6 +419,7 @@ Per-tier prices come from a table in `src/llm/openai-compatible.ts`. It feeds th
 | `pnpm serve` | HTTP server, SSE and demo UI |
 | `pnpm table` | routing calibration bench |
 | `pnpm eval` · `pnpm eval b` | classifier accuracy on each held-out set |
+| `pnpm eval:routing` | routing quality: tier accuracy and cost-error direction |
 | `pnpm smoke` | smoke test against the real API, one request per tier |
 | `pnpm test` | 131 tests |
 

@@ -1,3 +1,4 @@
+import { withRetry } from './retry.js';
 import type { ModelClient, ModelRequest, ModelResponse, Tier, ToolCall } from '../core/types.js';
 
 /**
@@ -23,6 +24,9 @@ export interface ResolvedModel {
 export abstract class AiSdkModel implements ModelClient {
   abstract readonly kind: string;
 
+  /** Reintentos ante fallas transitorias del proveedor. */
+  protected retries = Number(process.env.ORCHESTATI_RETRIES ?? 3);
+
   /** Traduce un tier logico al modelo concreto que lo atiende. */
   protected abstract resolveModel(tier: LlmTier): ResolvedModel;
 
@@ -35,7 +39,10 @@ export abstract class AiSdkModel implements ModelClient {
     const { id } = resolved;
     const { generateText } = await import('ai');
 
-    const res = await generateText(this.params(req, resolved) as never);
+    const res = await withRetry(() => generateText(this.params(req, resolved) as never), {
+      attempts: this.retries,
+      ...(req.signal ? { signal: req.signal } : {}),
+    });
 
     return this.toResponse({
       id,
@@ -52,10 +59,32 @@ export abstract class AiSdkModel implements ModelClient {
     const { id } = resolved;
     const { streamText } = await import('ai');
 
-    const result = streamText(this.params(req, resolved) as never);
-    for await (const delta of result.textStream) onDelta(delta);
-
-    const [text, usage, rawCalls] = await Promise.all([result.text, result.usage, result.toolCalls]);
+    /**
+     * Los deltas se emiten apenas llegan —bufferearlos para poder reintentar
+     * anularia el streaming, que es el punto—, asi que solo se reintenta
+     * mientras no se haya emitido nada. Una vez que el usuario vio texto,
+     * rehacer la llamada se lo mostraria duplicado.
+     *
+     * No es una perdida grande: 429 y 503 llegan al abrir la peticion, antes
+     * del primer token, que es exactamente el caso que esto cubre.
+     */
+    let emitido = false;
+    const { text, usage, rawCalls } = await withRetry(
+      async () => {
+        const result = streamText(this.params(req, resolved) as never);
+        for await (const delta of result.textStream) {
+          emitido = true;
+          onDelta(delta);
+        }
+        const [t, u, c] = await Promise.all([result.text, result.usage, result.toolCalls]);
+        return { text: t, usage: u, rawCalls: c };
+      },
+      {
+        attempts: this.retries,
+        canRetry: () => !emitido,
+        ...(req.signal ? { signal: req.signal } : {}),
+      },
+    );
     return this.toResponse({ id, started, text, usage, rawCalls });
   }
 

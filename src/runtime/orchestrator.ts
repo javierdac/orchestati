@@ -7,6 +7,8 @@ import { createModelClientSync } from '../llm/model.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { EventQueue } from '../core/events.js';
 import { InMemorySessionStore, type SessionStore } from './session.js';
+import { observeOutcome, SIGNAL_WEIGHT } from './outcome.js';
+import { featureSimilarity } from '../analysis/semantic/vectorize.js';
 import type { EventSink, OrchestrationEvent } from '../core/events.js';
 import { createDefaultToolRegistry } from '../tools/index.js';
 import { autoSafe } from '../tools/confirm.js';
@@ -95,6 +97,11 @@ export class Orchestrator {
   private maxEscalations: number;
   readonly sessions: SessionStore;
 
+  /** Corridas recientes, para poder adjuntarles feedback despues. */
+  private recientes = new Map<string, { signals: Signals; agentIds: string[]; input: string }>();
+  /** Ultima corrida de cada sesion, para detectar reformulaciones. */
+  private ultimaPorSesion = new Map<string, string>();
+
   constructor(opts: OrchestratorOptions = {}) {
     this.registry = opts.registry ?? createDefaultRegistry();
     this.router = opts.router ?? new Router(this.registry, opts.routerOptions ?? {});
@@ -140,6 +147,64 @@ export class Orchestrator {
     return queue;
   }
 
+  /** Cuantas corridas se recuerdan para poder puntuarlas mas tarde. */
+  private static readonly MAX_RECIENTES = 200;
+
+  /**
+   * Similitud a partir de la cual se considera que el usuario volvio a pedir
+   * lo mismo. Calibrado para no disparar con un pedido genuinamente nuevo.
+   */
+  private static readonly UMBRAL_REFORMULACION = 0.55;
+
+  private recordarCorrida(
+    runId: string,
+    datos: { signals: Signals; agentIds: string[]; input: string },
+    sessionId?: string,
+  ): void {
+    this.recientes.set(runId, datos);
+    if (this.recientes.size > Orchestrator.MAX_RECIENTES) {
+      this.recientes.delete(this.recientes.keys().next().value!);
+    }
+    if (sessionId) this.ultimaPorSesion.set(sessionId, runId);
+  }
+
+  /**
+   * Si el pedido nuevo se parece mucho al anterior de la misma sesion, es
+   * sintoma de que la respuesta anterior no sirvio. Es la unica señal de
+   * calidad que se puede leer sin preguntarle nada al usuario.
+   */
+  private detectarReformulacion(input: string, sessionId?: string): void {
+    if (!sessionId) return;
+    const anteriorId = this.ultimaPorSesion.get(sessionId);
+    if (!anteriorId) return;
+    const anterior = this.recientes.get(anteriorId);
+    if (!anterior) return;
+
+    const similitud = featureSimilarity(input, anterior.input);
+    if (similitud < Orchestrator.UMBRAL_REFORMULACION) return;
+
+    for (const id of anterior.agentIds) {
+      this.router.feedback(anterior.signals, id, 0.2, SIGNAL_WEIGHT.reformulation);
+    }
+    this.logger.debug('reformulacion detectada', { similitud, runId: anteriorId });
+  }
+
+  /**
+   * Opinion explicita del usuario sobre una corrida. Es la señal mas fuerte:
+   * las otras solo detectan fracaso, esta es la unica que habla de calidad.
+   *
+   * @param score 0 = no sirvio, 1 = resolvio el pedido
+   * @returns si se encontro la corrida
+   */
+  recordFeedback(runId: string, score: number): boolean {
+    const corrida = this.recientes.get(runId);
+    if (!corrida) return false;
+    for (const id of corrida.agentIds) {
+      this.router.feedback(corrida.signals, id, score, SIGNAL_WEIGHT.explicit);
+    }
+    return true;
+  }
+
   /** Solo analiza, sin ejecutar nada. Util para inspeccionar el ruteo. */
   inspect(input: string): { signals: Signals; decision: Decision } {
     const signals = analyze(input);
@@ -147,9 +212,14 @@ export class Orchestrator {
   }
 
   async run(input: string, opts: RunOptions = {}): Promise<OrchestrationResult> {
+    const runId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const tracer = new Tracer();
     const emit: EventSink = opts.onEvent ?? (() => {});
     const signals = analyze(input);
+
+    // Antes de nada: si esto es una reformulacion del pedido anterior, la
+    // corrida anterior se lleva una mala nota.
+    this.detectarReformulacion(input, opts.sessionId);
 
     // El historial explicito gana; si no, se lee de la sesion.
     const history =
@@ -214,12 +284,6 @@ export class Orchestrator {
       decision = this.router.route(signals, minTier);
     }
 
-    // Feedback al router: los agentes que respondieron bien suben de prioridad.
-    for (const o of outputs) {
-      if (!o.text && o.escalate) this.router.feedback(signals, o.agentId, 0.15);
-      else this.router.feedback(signals, o.agentId, o.confidence);
-    }
-
     const usage = outputs.reduce((acc, o) => addUsage(acc, o.usage), emptyUsage());
     usage.ms = tracer.elapsed();
     const toolCalls: ToolCallRecord[] = outputs.flatMap((o) => o.toolCalls ?? []);
@@ -238,6 +302,7 @@ export class Orchestrator {
     }
 
     const result: OrchestrationResult = {
+      id: runId,
       text,
       signals,
       decision,
@@ -247,6 +312,19 @@ export class Orchestrator {
       escalations,
       toolCalls,
     };
+    // Feedback al router a partir de lo OBSERVADO, no de lo que el agente dice
+    // de si mismo: su `confidence` sale de la complejidad y del comfortMax, que
+    // ya se conocian antes de ejecutar. Aprender de eso es aprender de la
+    // propia decision previa.
+    const observado = observeOutcome(result);
+    const peso = observado.weak ? SIGNAL_WEIGHT.weak : SIGNAL_WEIGHT.observed;
+    const agentIds = [...new Set(outputs.map((o) => o.agentId))];
+    for (const id of agentIds) {
+      this.router.feedback(signals, id, observado.score, peso);
+    }
+
+    this.recordarCorrida(runId, { signals, agentIds, input }, opts.sessionId);
+
     emit({ type: 'done', result });
     return result;
   }
@@ -294,9 +372,21 @@ export class Orchestrator {
 
       case 'parallel': {
         const workers = decision.agents.map((id) => this.registry.get(id));
+
+        /**
+         * Cada agente del fan-out recibe su propia tajada del presupuesto.
+         * Sin esto corren todos contra el mismo total y el primero que use
+         * muchas herramientas se lo come entero, dejando a los otros sin nada
+         * sin que nadie se entere. Se reserva un tercio para el sintetizador,
+         * que corre despues y tiene que poder leer todas las salidas.
+         */
+        const disponible = Math.max(0, env.budget.maxCostUsd - env.budget.spentUsd);
+        const reserva = decision.synthesizer ? disponible / 3 : 0;
+        const tajada = (disponible - reserva) / Math.max(1, workers.length);
+
         const settled = await Promise.all(
           workers.map((a) =>
-            this.invoke(a, [], env).catch((err: unknown) => {
+            this.invoke(a, [], env, tajada).catch((err: unknown) => {
               env.tracer.push('error', `${a.id} fallo: ${String(err)}`);
               const failed: AgentOutput = {
                 agentId: a.id,
@@ -332,6 +422,10 @@ export class Orchestrator {
     return budget.spentUsd >= budget.maxCostUsd || Date.now() - budget.startedAt >= budget.maxMs;
   }
 
+  /**
+   * @param maxCostUsd tope propio para esta invocacion. Sin el, el agente
+   *                   comparte el presupuesto global con todos los demas.
+   */
   private async invoke(
     agent: Agent,
     priorOutputs: AgentOutput[],
@@ -345,6 +439,7 @@ export class Orchestrator {
       history?: Message[];
       signal?: AbortSignal;
     },
+    maxCostUsd?: number,
   ): Promise<AgentOutput> {
     env.tracer.push('agent:start', `${agent.id} (${agent.tier})`);
     env.emit({ type: 'agent-start', agentId: agent.id, tier: agent.tier });
@@ -354,7 +449,11 @@ export class Orchestrator {
       signals: env.signals,
       history: env.history ?? [],
       priorOutputs,
-      budget: env.budget,
+      // Con tope propio, el agente ve un presupuesto acotado y su loop de
+      // herramientas corta contra ese, no contra el total de la corrida.
+      budget: maxCostUsd === undefined
+        ? env.budget
+        : { ...env.budget, maxCostUsd, spentUsd: 0 },
       services: this.services,
       depth: env.escalations,
       ...(env.signal ? { signal: env.signal } : {}),

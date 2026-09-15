@@ -180,3 +180,40 @@ describe('orchestrator', () => {
     expect(res.trace.every((e, i) => i === 0 || e.ms >= res.trace[i - 1]!.ms)).toBe(true);
   });
 });
+
+describe('presupuesto en el fan-out', () => {
+  it('cada agente del paralelo recibe su propia tajada', async () => {
+    const registry = createDefaultRegistry();
+    const vistos = new Map<string, number>();
+
+    // Se espía qué presupuesto ve cada agente cuando lo invocan.
+    for (const id of ['llm.researcher', 'llm.planner', 'llm.analyst']) {
+      const agente = registry.get(id);
+      const original = agente.run.bind(agente);
+      agente.run = async (ctx) => {
+        vistos.set(id, ctx.budget.maxCostUsd);
+        return original(ctx);
+      };
+    }
+
+    const o = new Orchestrator({
+      registry,
+      router: new Router(registry),
+      model: new MockModel(),
+      maxCostUsd: 1,
+    });
+    await o.run(
+      'investiga y compara opciones de base de datos vectorial, despues un plan y ademas estima costos',
+    );
+
+    expect(vistos.size).toBeGreaterThan(1);
+    for (const [id, tope] of vistos) {
+      // Ninguno ve el total: si lo viera, el primero podría gastárselo entero.
+      expect(tope, id).toBeLessThan(1);
+      expect(tope, id).toBeGreaterThan(0);
+    }
+    // Y queda reserva para el sintetizador, que corre después.
+    const repartido = [...vistos.values()].reduce((a, b) => a + b, 0);
+    expect(repartido).toBeLessThan(1);
+  });
+});

@@ -18,13 +18,28 @@ const msg = (n: number): Message[] => [
 ];
 
 describe('trimHistory', () => {
-  it('conserva lo reciente, que es lo que importa para el pedido actual', () => {
+  it('conserva el arranque y la cola, no solo la cola', () => {
     const largo = Array.from({ length: 50 }, (_, i) => msg(i)).flat();
     const corto = trimHistory(largo, 10);
+
     expect(corto).toHaveLength(10);
-    // Se queda con los ultimos, no con los primeros.
+    // El primer intercambio se guarda: ahi se establece de que se habla.
+    expect(corto[0]!.content).toBe('pedido 0');
+    expect(corto[1]!.content).toBe('respuesta 0');
+    // Y lo mas reciente tambien.
     expect(corto.at(-1)!.content).toBe('respuesta 49');
-    expect(corto[0]!.content).toBe('pedido 45');
+  });
+
+  it('con un cupo minimo se queda solo con lo reciente', () => {
+    const largo = Array.from({ length: 50 }, (_, i) => msg(i)).flat();
+    expect(trimHistory(largo, 2)).toEqual(msg(49));
+  });
+
+  it('nunca devuelve mas de lo pedido', () => {
+    const largo = Array.from({ length: 50 }, (_, i) => msg(i)).flat();
+    for (const n of [1, 2, 3, 4, 7, 10, 25]) {
+      expect(trimHistory(largo, n).length, `maxTurns=${n}`).toBeLessThanOrEqual(n);
+    }
   });
 
   it('no toca un historial corto', () => {

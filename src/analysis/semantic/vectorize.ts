@@ -136,3 +136,21 @@ export function centroid(vectors: SparseVector[]): SparseVector {
   for (const [idx, w] of sum) sum.set(idx, w / norm);
   return sum;
 }
+
+/**
+ * Similitud de Jaccard sobre los n-gramas de dos textos.
+ *
+ * Sin IDF a proposito: se usa para comparar dos frases entre si, no contra un
+ * corpus, y ahi el IDF calculado sobre dos documentos no significa nada.
+ */
+export function featureSimilarity(a: string, b: string): number {
+  const A = new Set(extractFeatures(a));
+  const B = new Set(extractFeatures(b));
+  if (A.size === 0 || B.size === 0) return 0;
+
+  let interseccion = 0;
+  const [chico, grande] = A.size <= B.size ? [A, B] : [B, A];
+  for (const f of chico) if (grande.has(f)) interseccion++;
+
+  return interseccion / (A.size + B.size - interseccion);
+}

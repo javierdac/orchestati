@@ -244,9 +244,13 @@ if (preset) {
   console.log(C.yellow('  ⚠ no credentials: MockModel. The routing is real, the answers are not.'));
 }
 console.log(C.dim('\n  /examples  list the paths   ·  /1 .. /11  run one'));
-console.log(C.dim('  /cost      running total    ·  /trace  detail  ·  /exit\n'));
+console.log(C.dim('  /cost      running total    ·  /trace  detail  ·  /exit'));
+
+console.log(C.dim('  /good /bad  rate the last answer — this is what the router learns from\n'));
 
 let traza = false;
+/** Ultima corrida, para poder puntuarla con /good y /bad. */
+let ultimaCorrida: string | undefined;
 // Para no repetir el reporte si lo ultimo que se pidio fue /costo.
 let yaMostrado = false;
 
@@ -308,6 +312,7 @@ async function enviar(texto: string): Promise<void> {
         break;
       case 'done': {
         const r = ev.result;
+        ultimaCorrida = r.id;
         if (!abierto) console.log(`\n${r.text}`);
         contador.registrar(r);
 
@@ -355,6 +360,20 @@ for (;;) {
   if (linea === '/costo' || linea === '/cost') {
     console.log(contador.reporte());
     yaMostrado = true;
+    continue;
+  }
+  if (linea === '/good' || linea === '/bad' || linea === '/util' || linea === '/inutil') {
+    if (!ultimaCorrida) {
+      console.log(C.dim('  nothing to rate yet\n'));
+      continue;
+    }
+    const bueno = linea === '/good' || linea === '/util';
+    o.recordFeedback(ultimaCorrida, bueno ? 1 : 0);
+    console.log(
+      C.dim(
+        `  noted — the router now ${bueno ? 'prefers' : 'avoids'} that agent for this kind of request\n`,
+      ),
+    );
     continue;
   }
   if (linea === '/traza' || linea === '/trace') {

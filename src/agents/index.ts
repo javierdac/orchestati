@@ -1,4 +1,5 @@
 import { AgentRegistry } from '../router/registry.js';
+import type { Agent } from '../core/types.js';
 import { createIdentityAgent, smalltalkAgent } from './reflex.js';
 import { LLM_AGENTS } from './pool.js';
 
@@ -6,7 +7,14 @@ export * from './base.js';
 export * from './reflex.js';
 export * from './pool.js';
 
-/** Registry con el pool completo por defecto. */
+/**
+ * Registry con el pool completo por defecto.
+ *
+ * Los agentes del pool son constantes de modulo, asi que se registran copias:
+ * de lo contrario dos registries compartirian las mismas instancias y tocar un
+ * agente en uno lo tocaria en el otro. Se nota enseguida en los tests, pero el
+ * problema real es la sorpresa para quien arma dos orquestadores distintos.
+ */
 export function createDefaultRegistry(): AgentRegistry {
   const registry = new AgentRegistry();
 
@@ -16,6 +24,12 @@ export function createDefaultRegistry(): AgentRegistry {
       .map((a) => `- **${a.name}** (\`${a.id}\`, tier ${a.tier}) — ${a.description}`)
       .join('\n');
 
-  registry.register(smalltalkAgent, createIdentityAgent(describePool), ...LLM_AGENTS);
+  const copia = (a: Agent): Agent => ({ ...a });
+
+  registry.register(
+    copia(smalltalkAgent),
+    createIdentityAgent(describePool),
+    ...LLM_AGENTS.map(copia),
+  );
   return registry;
 }

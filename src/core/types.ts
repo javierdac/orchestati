@@ -341,6 +341,8 @@ export interface TraceEvent {
 }
 
 export interface OrchestrationResult {
+  /** Identificador de la corrida, para adjuntarle feedback despues. */
+  id: string;
   text: string;
   signals: Signals;
   decision: Decision;

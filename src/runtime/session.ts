@@ -15,9 +15,21 @@ export interface SessionStore {
 /** Cuantos mensajes se conservan por sesion. */
 export const DEFAULT_MAX_TURNS = 20;
 
-/** Recorta desde el final: lo reciente es lo que importa para el pedido actual. */
+/**
+ * Recorta conservando el arranque y la cola.
+ *
+ * Quedarse solo con los ultimos mensajes pierde el primer intercambio, que es
+ * donde casi siempre se establece de que se esta hablando: despues de veinte
+ * turnos, "ahora pasalo a python" ya no tiene a que referirse. Se guarda el
+ * primer par y se completa con lo mas reciente.
+ */
 export function trimHistory(messages: Message[], maxTurns = DEFAULT_MAX_TURNS): Message[] {
-  return messages.length <= maxTurns ? messages : messages.slice(-maxTurns);
+  if (messages.length <= maxTurns) return messages;
+  if (maxTurns <= 2) return messages.slice(-maxTurns);
+
+  const cabeza = messages.slice(0, 2);
+  const cola = messages.slice(-(maxTurns - 2));
+  return [...cabeza, ...cola];
 }
 
 export class InMemorySessionStore implements SessionStore {

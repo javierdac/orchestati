@@ -265,8 +265,11 @@ export class Router {
     return picked;
   }
 
-  /** Feedback post-ejecucion para que el ranking aprenda. */
-  feedback(signals: Signals, agentId: string, outcome: number): void {
-    this.memory.record(signals.primaryIntent, agentId, outcome);
+  /**
+   * Feedback post-ejecucion para que el ranking aprenda.
+   * @param weight cuanto confiar en la señal (ver SIGNAL_WEIGHT).
+   */
+  feedback(signals: Signals, agentId: string, outcome: number, weight = 1): void {
+    this.memory.record(signals.primaryIntent, agentId, outcome, weight);
   }
 }

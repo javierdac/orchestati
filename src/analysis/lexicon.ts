@@ -106,6 +106,12 @@ export const INTENT_RULES: IntentRule[] = [
       /\b(doesn'?t work|fails|failing|bug|crash|exception|stack ?trace|broken|fix (this|it|the))\b/,
       // "error", "TypeError:", "NullPointerException" — con o sin prefijo pegado.
       /\b\w*(error|exception)\b/,
+      // Vocabulario de sintomas: un bug no siempre se anuncia con la palabra
+      // "error". Estos describen el problema sin nombrarlo.
+      /\b(timeout|time ?out|se cuelga|queda colgado|hangs?|freezes?|deadlock|race condition|memory leak|leak de memoria|perdida de memoria)\b/,
+      /\b(intermitente|a veces si a veces no|flaky|intermittent|se degrada|degraded|esporadico)\b/,
+      /\b(solo (pasa |falla )?en (produccion|prod)|only in (production|prod)|anda en local pero no|works locally but)\b/,
+      /\b(crashea|se cae|se reinicia|revienta|crashes?|restarts? by itself|segmentation fault|core dumped|panic)\b/,
       /\b(undefined|null|nan) (is not|of undefined)|cannot read (property|properties)/,
     ],
   },

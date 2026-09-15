@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, beforeAll } from 'vitest';
 import { resolveInside, SandboxError } from '../src/tools/sandbox.js';
 import { evaluateExpression, calculatorTool, httpFetchTool } from '../src/tools/builtin/misc.js';
+import { isPrivateAddress, checkUrlIsPublic } from '../src/tools/net.js';
 import { parseCommand } from '../src/tools/builtin/shell.js';
 import { readFileTool, writeFileTool, searchCodeTool, listDirTool } from '../src/tools/builtin/fs.js';
 import { analyze } from '../src/analysis/analyzer.js';
@@ -141,17 +142,92 @@ describe('herramientas de archivos', () => {
   });
 });
 
+describe('deteccion de direcciones privadas', () => {
+  it('reconoce los rangos que no deben alcanzarse', () => {
+    for (const ip of [
+      '127.0.0.1', '0.0.0.0', '10.1.2.3', '172.16.0.1', '172.31.255.255',
+      '192.168.1.1', '169.254.169.254', '100.64.0.1', '224.0.0.1',
+      '::1', '::', 'fc00::1', 'fd12:3456::1', 'fe80::1', '::ffff:127.0.0.1',
+    ]) {
+      expect(isPrivateAddress(ip), ip).toBe(true);
+    }
+  });
+
+  it('deja pasar direcciones publicas', () => {
+    for (const ip of ['8.8.8.8', '1.1.1.1', '172.32.0.1', '192.167.1.1', '2606:4700::1111']) {
+      expect(isPrivateAddress(ip), ip).toBe(false);
+    }
+  });
+
+  it('ante algo que no puede interpretar, falla cerrado', () => {
+    expect(isPrivateAddress('no-es-una-ip')).toBe(true);
+    expect(isPrivateAddress('999.1.1.1')).toBe(true);
+  });
+});
+
 describe('http_fetch', () => {
   it('no le habla a la red local', async () => {
     for (const url of ['http://localhost:8080/x', 'http://127.0.0.1/x', 'http://192.168.1.1/x', 'http://169.254.169.254/latest/meta-data']) {
       const res = await httpFetchTool.execute({ url }, ctx());
-      expect(res.ok).toBe(false);
-      expect(res.content).toContain('red local');
+      expect(res.ok, url).toBe(false);
     }
   });
 
   it('rechaza protocolos que no sean http(s)', async () => {
-    const res = await httpFetchTool.execute({ url: 'file:///etc/passwd' }, ctx());
-    expect(res.ok).toBe(false);
+    for (const url of ['file:///etc/passwd', 'gopher://x/', 'ftp://x/']) {
+      const res = await httpFetchTool.execute({ url }, ctx());
+      expect(res.ok).toBe(false);
+    }
+  });
+
+  it('valida la IP resuelta, no el texto del hostname', async () => {
+    // localtest.me y similares resuelven a 127.0.0.1 siendo nombres publicos:
+    // un filtro por texto los dejaria pasar.
+    const check = await checkUrlIsPublic('http://localhost/x');
+    expect(check.ok).toBe(false);
+
+    // Una IP privada escrita en decimal tampoco pasa.
+    expect((await checkUrlIsPublic('http://10.0.0.1/x')).ok).toBe(false);
+    expect((await checkUrlIsPublic('http://[::1]/x')).ok).toBe(false);
+  });
+
+  it('revalida cada redireccion en vez de seguirlas a ciegas', async () => {
+    // 93.184.216.34 es publica (IP literal: no consulta DNS) y responde con un
+    // 302 hacia loopback. Si el tool siguiera redirecciones solo, la validacion
+    // inicial lo habria dejado pasar y terminaria leyendo la red interna.
+    const original = globalThis.fetch;
+    const visitadas: string[] = [];
+    globalThis.fetch = (async (url: string | URL) => {
+      visitadas.push(String(url));
+      return new Response(null, { status: 302, headers: { location: 'http://127.0.0.1:11434/secret' } });
+    }) as typeof fetch;
+
+    try {
+      const res = await httpFetchTool.execute({ url: 'http://93.184.216.34/ok' }, ctx());
+      expect(res.ok).toBe(false);
+      expect(res.content).toMatch(/red local|privada/);
+      // Llego a pedir la primera, pero nunca la segunda.
+      expect(visitadas).toEqual(['http://93.184.216.34/ok']);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it('corta las cadenas de redireccion infinitas', async () => {
+    const original = globalThis.fetch;
+    let n = 0;
+    globalThis.fetch = (async () => {
+      n++;
+      return new Response(null, { status: 302, headers: { location: 'http://93.184.216.34/vuelta' } });
+    }) as typeof fetch;
+
+    try {
+      const res = await httpFetchTool.execute({ url: 'http://93.184.216.34/inicio' }, ctx());
+      expect(res.ok).toBe(false);
+      expect(res.content).toContain('redirecciones');
+      expect(n).toBeLessThanOrEqual(6);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { checkUrlIsPublic } from '../net.js';
 import type { Tool, ToolResult } from '../types.js';
 
 /**
@@ -88,6 +89,9 @@ export const calculatorTool: Tool<{ expression: string }> = {
   },
 };
 
+/** Cuantas redirecciones se siguen, revalidando cada una. */
+const MAX_REDIRECTS = 5;
+
 export const httpFetchTool: Tool<{ url: string }> = {
   name: 'http_fetch',
   description: 'Descarga el contenido de una URL publica (solo GET). Requiere confirmacion.',
@@ -96,35 +100,49 @@ export const httpFetchTool: Tool<{ url: string }> = {
   summarize: (a) => `descargar ${a.url}`,
 
   async execute(args, ctx): Promise<ToolResult> {
-    let url: URL;
-    try {
-      url = new URL(args.url);
-    } catch {
-      return { ok: false, content: 'URL invalida' };
-    }
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-      return { ok: false, content: 'solo se permiten http(s)' };
-    }
-    // Nada de hablarle a la red interna desde una herramienta del modelo.
-    if (/^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|169\.254\.|\[?::1)/.test(url.hostname)) {
-      return { ok: false, content: 'no se permiten destinos de red local' };
-    }
-
     const timeout = AbortSignal.timeout(15_000);
-    try {
-      const res = await fetch(url, {
-        method: 'GET',
-        redirect: 'follow',
-        signal: ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout,
-      });
+    const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout;
+
+    let actual = args.url;
+    const saltos: string[] = [];
+
+    for (let i = 0; i <= MAX_REDIRECTS; i++) {
+      // Cada salto se valida de nuevo: la primera URL puede ser publica y
+      // redirigir a 127.0.0.1, y un nombre publico puede resolver a una IP
+      // privada. Validar solo la original no sirve de nada.
+      const check = await checkUrlIsPublic(actual);
+      if (!check.ok) {
+        return {
+          ok: false,
+          content: `${check.reason}${saltos.length ? ` (tras ${saltos.length} redireccion(es))` : ''}`,
+          meta: { url: actual, address: check.address, saltos },
+        };
+      }
+
+      let res: Response;
+      try {
+        // `manual`: seguir automaticamente saltearia la validacion de arriba.
+        res = await fetch(actual, { method: 'GET', redirect: 'manual', signal });
+      } catch (err) {
+        return { ok: false, content: `fallo la descarga: ${String(err)}` };
+      }
+
+      if (res.status >= 300 && res.status < 400) {
+        const destino = res.headers.get('location');
+        if (!destino) return { ok: false, content: `redireccion ${res.status} sin destino` };
+        saltos.push(actual);
+        actual = new URL(destino, actual).toString();
+        continue;
+      }
+
       const text = (await res.text()).slice(0, 50_000);
       return {
         ok: res.ok,
         content: `HTTP ${res.status}\n\n${text}`,
-        meta: { status: res.status, host: url.hostname },
+        meta: { status: res.status, url: actual, address: check.address, saltos },
       };
-    } catch (err) {
-      return { ok: false, content: `fallo la descarga: ${String(err)}` };
     }
+
+    return { ok: false, content: `demasiadas redirecciones (mas de ${MAX_REDIRECTS})`, meta: { saltos } };
   },
 };
