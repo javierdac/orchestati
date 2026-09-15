@@ -536,6 +536,7 @@ Per-tier prices come from a table in `src/llm/openai-compatible.ts`. It feeds th
 | `pnpm eval:routing` | routing quality: tier accuracy and cost-error direction |
 | `pnpm eval:quality` | does the cheap tier answer well enough? (needs a key, spends money) |
 | `pnpm tune` | sweep model configurations for cost against a one-time profile |
+| `pnpm cycle` | sweep, then validate the recommended configuration in one go |
 | `pnpm models` | ask each configured provider which models it actually offers |
 | `pnpm info` | what this system is right now: models and prices per tier, agents, tools |
 | `pnpm smoke` | smoke test against the real API, one request per tier |
