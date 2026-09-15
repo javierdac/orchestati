@@ -98,6 +98,18 @@ export const PRESETS = {
       swarm: 'llama-3.3-70b-versatile',
     },
   },
+  xai: {
+    label: 'xAI / Grok',
+    baseURL: 'https://api.x.ai/v1',
+    keyEnv: ['XAI_API_KEY', 'GROK_API_KEY'],
+    models: {
+      light: 'grok-3-mini',
+      standard: 'grok-3',
+      deep: 'grok-4',
+      swarm: 'grok-3',
+    },
+    fallbackPricing: { in: 5, out: 15 },
+  },
   moonshot: {
     label: 'Moonshot / Kimi',
     baseURL: 'https://api.moonshot.ai/v1',

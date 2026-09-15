@@ -309,6 +309,23 @@ async function barrer(spec: string | undefined): Promise<void> {
    * todo suele ser tambien lo mas riesgoso, y este barrido no mide calidad.
    */
   const recomendada = propuestas.find((p) => p.etiqueta.startsWith('solo cambiar')) ?? propuestas[1];
+
+  if (process.argv.includes('--json')) {
+    console.log(
+      JSON.stringify(
+        {
+          perfil: { origen: perfil.origen, pedidos: perfil.pedidos.length, backend: perfil.backend },
+          actual: { config: actual, costo: costoActual },
+          propuestas: propuestas.map((p) => ({ etiqueta: p.etiqueta, config: p.config, costo: costoDe(perfil, p.config, base).total })),
+          recomendada: recomendada?.config,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
   if (recomendada) {
     const { total } = costoDe(perfil, recomendada.config, base);
     console.log(`\n${C.bold('  Por donde empezar')}  ${C.dim(`${recomendada.etiqueta} · $${total.toFixed(5)}`)}`);
