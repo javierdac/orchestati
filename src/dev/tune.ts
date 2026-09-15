@@ -19,7 +19,16 @@ import { createModelClient } from '../llm/model.js';
 import { loadEnv } from '../core/env.js';
 import { allowAll } from '../tools/confirm.js';
 import { cargarPedidos } from './requests.js';
-import { PRESETS, priceOf, pricedModels, isPresetName, type PresetName } from '../llm/openai-compatible.js';
+import {
+  PRESETS,
+  priceOf,
+  pricedModels,
+  isPresetName,
+  presetUsable,
+  parseTierSpec,
+  type PresetName,
+} from '../llm/openai-compatible.js';
+import type { EndpointPreset } from '../llm/openai-compatible.js';
 import type { LlmTier } from '../llm/ai-sdk-base.js';
 import type { Tier } from '../core/types.js';
 
@@ -193,8 +202,23 @@ async function barrer(spec: string | undefined): Promise<void> {
    * los pida: una recomendacion de "todo gratis" no es una recomendacion.
    */
   const incluirLocales = process.argv.includes('--include-local');
+  const todosLosProveedores = process.argv.includes('--all-providers');
   const candidatos = pricedModels();
-  const proponibles = incluirLocales ? candidatos : candidatos.filter((c) => !c.local);
+
+  /**
+   * Por defecto solo se proponen proveedores con credencial configurada.
+   * Recomendar una configuracion que no se puede correr no es una
+   * recomendacion: manda a buscar una key antes de poder probar nada.
+   */
+  const disponible = (spec: string): boolean => {
+    const { preset } = parseTierSpec(spec);
+    if (!preset) return false;
+    const p: EndpointPreset = PRESETS[preset];
+    if (p.local) return incluirLocales;
+    return todosLosProveedores || presetUsable(preset);
+  };
+
+  const proponibles = candidatos.filter((c) => disponible(c.spec));
 
   console.log(`\n${C.bold('  Que costaria cada modelo, por escalon')}  ${C.dim('(solo modelos con precio conocido)')}`);
 
@@ -216,17 +240,28 @@ async function barrer(spec: string | undefined): Promise<void> {
 
   // --- Configuraciones completas -------------------------------------------
   /**
-   * El mas barato ENTRE los que algun preset designa para ese escalon. Sin la
-   * restriccion, ordenar por precio pone un 8B en `deep` — justo el escalon
-   * que existe para los pedidos que ese modelo no resuelve.
+   * Candidatos para un escalon: los modelos que algun preset designa para ese
+   * escalon, mas los del escalon inmediatamente inferior.
+   *
+   * Sin restriccion alguna, ordenar por precio pone un 8B en `deep` — justo el
+   * escalon que existe para los pedidos que ese modelo no resuelve. Restringir
+   * al escalon exacto es el otro extremo: con un solo proveedor no queda
+   * ninguna alternativa y el barrido no propone nada. Bajar un escalon es el
+   * downgrade que alguien probaria de verdad.
    */
-  const masBarato = (tier: LlmTier): string => {
-    const aptos = proponibles.filter((c) => c.tiers.includes(tier));
-    const universo = aptos.length > 0 ? aptos : proponibles;
-    return universo
+  const ORDEN: LlmTier[] = ['light', 'standard', 'deep'];
+  const aptosPara = (tier: LlmTier): typeof proponibles => {
+    const i = ORDEN.indexOf(tier);
+    const permitidos = new Set<LlmTier>([tier, 'swarm']);
+    if (i > 0) permitidos.add(ORDEN[i - 1]!);
+    const aptos = proponibles.filter((c) => c.tiers.some((t) => permitidos.has(t)));
+    return aptos.length > 0 ? aptos : proponibles;
+  };
+
+  const masBarato = (tier: LlmTier): string =>
+    aptosPara(tier)
       .map((c) => ({ spec: c.spec, costo: costoDe(perfil, { [tier]: c.spec }, base).total }))
       .sort((a, b) => a.costo - b.costo)[0]!.spec;
-  };
 
   // El escalon que se lleva mas plata: cambiar ese solo suele dar casi todo el ahorro.
   const dominante = TIERS.map((t) => ({ tier: t, costo: costoDe(perfil, { [t]: actual[t] }, base).total }))
@@ -258,8 +293,15 @@ async function barrer(spec: string | undefined): Promise<void> {
     if (inciertos.size) console.log(C.yellow(`      ⚠ precio estimado para: ${[...inciertos].join(', ')}`));
   }
 
+  const sinCredencial = [...new Set(candidatos.filter((c) => !c.local && !disponible(c.spec)).map((c) => parseTierSpec(c.spec).preset))];
+  if (sinCredencial.length && !todosLosProveedores) {
+    console.log(
+      C.dim(`\n    Sin credencial, no se proponen: ${sinCredencial.join(', ')}.`) +
+        C.dim(' Con --all-providers se incluyen igual.'),
+    );
+  }
   if (!incluirLocales) {
-    console.log(C.dim('\n    (los modelos locales cuestan 0 y aparecen arriba; --include-local los propone como configuracion)'));
+    console.log(C.dim('    Los modelos locales cuestan 0 y aparecen arriba; --include-local los propone.'));
   }
 
   /**
@@ -276,8 +318,13 @@ async function barrer(spec: string | undefined): Promise<void> {
 
   console.log(
     C.dim(
-      '\n  Esto solo mide plata. Un modelo mas barato puede responder peor, y eso no\n' +
-        '  aparece aca: validalo con `pnpm eval:quality` antes de dejarlo fijo.\n',
+      '\n  Dos limites de este barrido, medidos:\n' +
+        '\n  1. El numero es direccional, no exacto. La aritmetica asume que los tokens\n' +
+        '     no cambian al cambiar de modelo, y si cambian: otro modelo escribe mas o\n' +
+        '     menos, y decide distinto cuando usar una herramienta. En una validacion\n' +
+        '     real, un 67% predicho dio 31%. El orden de las opciones se mantuvo.\n' +
+        '\n  2. Solo mide plata. Un modelo mas barato puede responder peor y eso no\n' +
+        '     aparece aca: validalo con `pnpm eval:quality` antes de dejarlo fijo.\n',
     ),
   );
 }

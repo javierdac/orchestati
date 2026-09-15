@@ -35,6 +35,11 @@ export class MixedModel implements ModelClient {
     return TIERS.map((t) => ({ tier: t, label: this.porTier[t].label }));
   }
 
+  describeTier(tier: LlmTier): { model: string; price?: { in: number; out: number; known: boolean } } {
+    const { client, label } = this.porTier[tier];
+    return client.describeTier?.(tier) ?? { model: label };
+  }
+
   async generate(req: ModelRequest): Promise<ModelResponse> {
     return this.porTier[req.tier].client.generate(req);
   }

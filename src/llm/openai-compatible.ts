@@ -253,6 +253,12 @@ export class OpenAICompatibleModel extends AiSdkModel {
     return process.env.ORCHESTATI_BASE_URL?.trim() || this.preset.baseURL;
   }
 
+  describeTier(tier: LlmTier): { model: string; price?: { in: number; out: number; known: boolean } } {
+    const id = modelForTierIn(this.preset, tier, this.overrides);
+    const price = priceOf(`${this.name}:${id}`);
+    return { model: `${this.name}:${id}`, ...(price ? { price } : {}) };
+  }
+
   async init(): Promise<this> {
     if (this.provider) return this;
     const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible');
@@ -285,6 +291,12 @@ export class OpenAICompatibleModel extends AiSdkModel {
       return [];
     }
   }
+}
+
+/** ¿Se puede usar este preset ahora mismo? */
+export function presetUsable(nombre: PresetName): boolean {
+  const p: EndpointPreset = PRESETS[nombre];
+  return p.local ? false : p.keyEnv.some((v) => process.env[v]);
 }
 
 /** Presets con credencial configurada en el entorno. Los locales no cuentan. */

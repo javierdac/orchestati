@@ -8,6 +8,7 @@ import { ToolRegistry } from '../tools/registry.js';
 import { EventQueue } from '../core/events.js';
 import { InMemorySessionStore, type SessionStore } from './session.js';
 import { observeOutcome, SIGNAL_WEIGHT } from './outcome.js';
+import { describeAgent, formatSystemInfo, type SystemInfo, type TierInfo } from '../core/info.js';
 import { featureSimilarity } from '../analysis/semantic/vectorize.js';
 import type { EventSink, OrchestrationEvent } from '../core/events.js';
 import { createDefaultToolRegistry } from '../tools/index.js';
@@ -115,6 +116,7 @@ export class Orchestrator {
       tools: opts.tools ?? createDefaultToolRegistry(),
       confirm: opts.confirm ?? autoSafe(),
       root: opts.root ?? process.cwd(),
+      describeSystem: () => formatSystemInfo(this.info(), { markdown: true }),
     };
     this.maxCostUsd = opts.maxCostUsd ?? 0.5;
     this.maxMs = opts.maxMs ?? 120_000;
@@ -203,6 +205,49 @@ export class Orchestrator {
       this.router.feedback(corrida.signals, id, score, SIGNAL_WEIGHT.explicit);
     }
     return true;
+  }
+
+  /**
+   * Lo que el sistema puede decir de si mismo: backend, modelo y precio por
+   * escalon, agentes, herramientas y politica activa.
+   *
+   * Se calcula desde el estado real —el registry, el catalogo de herramientas,
+   * el cliente de modelo— y no desde una lista escrita a mano, para que no
+   * pueda quedar desactualizado respecto de lo que el sistema hace.
+   */
+  info(): SystemInfo {
+    const agentes = this.registry.all();
+
+    const tiers: TierInfo[] = TIER_ORDER.map((tier) => {
+      const delTier = agentes.filter((a) => a.tier === tier).map((a) => a.id);
+      if (tier === 'reflex') return { tier, agents: delTier };
+      const resuelto = this.model.describeTier?.(tier);
+      return {
+        tier,
+        agents: delTier,
+        ...(resuelto?.model ? { model: resuelto.model } : {}),
+        ...(resuelto?.price ? { price: resuelto.price } : {}),
+      };
+    });
+
+    return {
+      backend: this.model.kind,
+      confirm: this.services.confirm.name,
+      root: this.services.root,
+      tiers,
+      agents: agentes.map((a) => describeAgent(a, this.toolsOf(a.id))),
+      tools: this.services.tools.all().map((t) => ({
+        name: t.name,
+        description: t.description,
+        risk: t.risk,
+      })),
+    };
+  }
+
+  /** Herramientas que un agente declaro, filtradas a las que existen. */
+  private toolsOf(agentId: string): string[] {
+    const declaradas = (this.registry.get(agentId) as { tools?: string[] }).tools ?? [];
+    return declaradas.filter((n) => this.services.tools.has(n));
   }
 
   /** Solo analiza, sin ejecutar nada. Util para inspeccionar el ruteo. */

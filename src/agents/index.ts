@@ -18,6 +18,8 @@ export * from './pool.js';
 export function createDefaultRegistry(): AgentRegistry {
   const registry = new AgentRegistry();
 
+  // Por defecto describe solo el pool; el orquestador le pasa la descripcion
+  // completa del sistema —modelos, precios, herramientas— cuando la tiene.
   const describePool = (): string =>
     registry
       .all()

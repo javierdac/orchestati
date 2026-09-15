@@ -267,7 +267,17 @@ Requests can come from your saved sessions (`--from=sessions`), a file with one 
 
 The sweep reports three things — where the money goes (tokens and calls per tier), what each priced model would cost on each tier, and a few complete configurations with the env vars to try them. Models whose price came from the conservative fallback rather than the table are flagged, so you know which numbers are solid.
 
-It only measures money. A cheaper model can answer worse and that does not show up here, which is what `pnpm eval:quality` is for.
+**The sweep predicts direction, not magnitude.** Its arithmetic assumes token counts stay put when the model changes, and they do not — a different model writes more or less, and decides differently about reaching for a tool. Validating one recommendation end to end, a predicted 67% saving came out at 31%. The *ranking* of the options held, which is what you actually need from it.
+
+It also only measures money. A cheaper model can answer worse and that does not show up here, which is what `pnpm eval:quality` is for. Running that loop on the bundled set:
+
+| Configuration | Quality (wins or ties) | Cost vs. always-expensive |
+|---|---|---|
+| Default | 79% | 29% **more** expensive |
+| Cheapest everywhere (picked by hand) | 71% | 50% saved |
+| **What `tune` recommended** | **86%** | **31% saved** |
+
+The tool's recommendation beat the hand-picked one on both axes. It changes a single tier — the one carrying 84% of the spend — which is also why a quality drop would have had an obvious cause.
 
 #### Measuring the routing itself
 
@@ -429,6 +439,7 @@ pnpm serve      # http://127.0.0.1:3000
 | `POST /chat` | run and return the full result |
 | `POST /chat/stream` | the same, as SSE, event by event |
 | `POST /inspect` | analysis and routing decision, **without executing** |
+| `GET /info` | models and prices per tier, agents, tools, active policy |
 | `GET /agents` | the pool with tiers, capabilities and costs |
 | `GET` · `DELETE /session/:id` | a session's history |
 | `GET /` | demo UI: pipeline, tools and trace, live |
@@ -526,6 +537,7 @@ Per-tier prices come from a table in `src/llm/openai-compatible.ts`. It feeds th
 | `pnpm eval:quality` | does the cheap tier answer well enough? (needs a key, spends money) |
 | `pnpm tune` | sweep model configurations for cost against a one-time profile |
 | `pnpm models` | ask each configured provider which models it actually offers |
+| `pnpm info` | what this system is right now: models and prices per tier, agents, tools |
 | `pnpm smoke` | smoke test against the real API, one request per tier |
 | `pnpm test` | the test suite |
 | `pnpm verify:package` | installs the built package in a temp project and checks it imports, types and runs |

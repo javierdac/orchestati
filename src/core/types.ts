@@ -196,6 +196,8 @@ export interface Agent {
   intents: Intent[];
   /** Costo relativo 0..1 — usado para penalizar en el ranking. */
   cost: number;
+  /** Herramientas que declara usar. Metadata: el ruteo no la mira. */
+  tools?: string[];
   /**
    * Veto o boost explicito. Devolver:
    *  - `null` para "no aplico a este pedido" (veto duro),
@@ -260,6 +262,8 @@ export interface Services {
   confirm: ConfirmationPolicy;
   /** Raiz del sandbox de archivos. */
   root: string;
+  /** Descripcion legible del sistema, si el runtime puede producirla. */
+  describeSystem?: () => string;
 }
 
 export interface ModelClient {
@@ -272,6 +276,11 @@ export interface ModelClient {
    * y emite el texto completo de una.
    */
   generateStream?(req: ModelRequest, onDelta: (delta: string) => void): Promise<ModelResponse>;
+  /**
+   * Que modelo y a que precio atiende un escalon. Opcional: un cliente puede
+   * no saberlo. Sirve para que el sistema pueda describirse a si mismo.
+   */
+  describeTier?(tier: Exclude<Tier, 'reflex'>): { model: string; price?: { in: number; out: number; known: boolean } } | undefined;
 }
 
 /** Lo que el modelo necesita saber de una herramienta para poder pedirla. */

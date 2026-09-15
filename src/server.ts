@@ -95,6 +95,12 @@ export function createOrchestatiServer(opts: ServerOptions = {}) {
         return;
       }
 
+      // --- Que es este sistema -------------------------------------------
+      if (req.method === 'GET' && url.pathname === '/info') {
+        json(res, 200, orchestrator.info());
+        return;
+      }
+
       // --- Pool de agentes ----------------------------------------------
       if (req.method === 'GET' && url.pathname === '/agents') {
         json(res, 200, {

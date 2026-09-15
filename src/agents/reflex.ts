@@ -101,9 +101,13 @@ export function createIdentityAgent(describePool: () => string): Agent {
         ? 'Soy un orquestador: analizo tu pedido localmente (sin gastar tokens) y lo derivo al agente adecuado.'
         : 'I am an orchestrator: I analyze your request locally (no tokens spent) and route it to the right agent.';
 
+      // Si el runtime sabe describirse entero —modelos, precios, herramientas—
+      // se usa eso; si no, al menos el pool.
+      const cuerpo = ctx.services.describeSystem?.() ?? describePool();
+
       return {
         agentId: 'reflex.identity',
-        text: `${head}\n\n${describePool()}`,
+        text: `${head}\n\n${cuerpo}`,
         confidence: 0.95,
         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, ms: Date.now() - started },
         meta: { llm: false },

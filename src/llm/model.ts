@@ -66,6 +66,12 @@ export class GatewayModel extends AiSdkModel {
   protected costOf(id: string, inputTokens: number, outputTokens: number): number {
     return estimateCost(id, inputTokens, outputTokens);
   }
+
+  describeTier(tier: LlmTier): { model: string; price?: { in: number; out: number; known: boolean } } {
+    const model = modelForTier(tier);
+    const p = PRICING[model];
+    return { model, ...(p ? { price: { ...p, known: true } } : {}) };
+  }
 }
 
 /**
@@ -76,6 +82,10 @@ export class MockModel implements ModelClient {
   readonly kind = 'mock';
 
   constructor(private latencyMs = 0) {}
+
+  describeTier(tier: LlmTier): { model: string } {
+    return { model: `mock:${modelForTier(tier)}` };
+  }
 
   /** Corta la respuesta en fragmentos para ejercitar el camino de streaming. */
   async generateStream(req: ModelRequest, onDelta: (delta: string) => void): Promise<ModelResponse> {

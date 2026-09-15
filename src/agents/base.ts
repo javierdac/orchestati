@@ -74,6 +74,7 @@ export function llmAgent(spec: LlmAgentSpec): Agent {
     capabilities: spec.capabilities,
     intents: spec.intents,
     cost: spec.cost,
+    ...(spec.tools?.length ? { tools: spec.tools } : {}),
     ...(spec.accepts ? { accepts: spec.accepts } : {}),
 
     async run(ctx: AgentContext): Promise<AgentOutput> {
