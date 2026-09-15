@@ -328,6 +328,12 @@ respuestas no**. Sirve para desarrollar y testear el orquestador entero sin gast
 un peso. Con la key, las mismas decisiones pegan contra modelos de verdad vía
 Vercel AI Gateway (los modelos se configuran por env, ver `.env.example`).
 
+Los precios por tier salen de una tabla en `src/llm/model.ts` (tarifas de primera
+parte de Anthropic, referencia 2026-06). Alimenta el corte por presupuesto, así
+que un número inflado no es inofensivo: corta corridas que en realidad entraban.
+Un modelo fuera de la tabla se asume caro — sobrestimar corta de más y se nota;
+subestimar gasta de más y aparece en la factura.
+
 ```ts
 import { Orchestrator } from 'orchestati';
 

@@ -14,12 +14,28 @@ const DEFAULT_MODELS: Record<LlmTier, string> = {
   swarm: 'anthropic/claude-sonnet-5',
 };
 
-/** USD por millon de tokens (entrada, salida). Aproximado, solo para el budget. */
+/**
+ * USD por millon de tokens (entrada, salida). Tarifas de primera parte de
+ * Anthropic, referencia 2026-06. Bedrock y Vertex cobran distinto.
+ *
+ * Esto alimenta el corte por presupuesto, asi que un numero inflado no es
+ * inofensivo: corta corridas que en realidad entraban en el budget.
+ */
 const PRICING: Record<string, { in: number; out: number }> = {
   'anthropic/claude-haiku-4-5': { in: 1, out: 5 },
-  'anthropic/claude-sonnet-5': { in: 3, out: 15 },
-  'anthropic/claude-opus-5': { in: 15, out: 75 },
+  'anthropic/claude-sonnet-5': { in: 2, out: 10 },
+  'anthropic/claude-sonnet-4-6': { in: 3, out: 15 },
+  'anthropic/claude-opus-5': { in: 5, out: 25 },
+  'anthropic/claude-opus-4-8': { in: 5, out: 25 },
+  'anthropic/claude-fable-5-1': { in: 10, out: 50 },
 };
+
+/**
+ * Para un modelo que no esta en la tabla se asume caro. En un control de
+ * presupuesto, sobrestimar corta de mas y subestimar gasta de mas: la primera
+ * se nota y se corrige, la segunda aparece en la factura.
+ */
+const PRICING_DESCONOCIDO = { in: 10, out: 50 };
 
 export function modelForTier(tier: LlmTier): string {
   const env = process.env[`ORCHESTATI_MODEL_${tier.toUpperCase()}`];
@@ -27,7 +43,7 @@ export function modelForTier(tier: LlmTier): string {
 }
 
 export function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
-  const p = PRICING[model] ?? { in: 3, out: 15 };
+  const p = PRICING[model] ?? PRICING_DESCONOCIDO;
   return (inputTokens * p.in + outputTokens * p.out) / 1_000_000;
 }
 
