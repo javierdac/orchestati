@@ -84,19 +84,18 @@ export const PRESETS = {
     label: 'Groq (nivel gratuito, modelos de pesos abiertos)',
     baseURL: 'https://api.groq.com/openai/v1',
     keyEnv: ['GROQ_API_KEY'],
-    // USD por millon de tokens. Aproximado, referencia 2026-09: verificalo
-    // contra la pagina del proveedor antes de sacar conclusiones de plata.
-    pricing: {
-      'llama-3.1-8b-instant': { in: 0.05, out: 0.08 },
-      'llama-3.3-70b-versatile': { in: 0.59, out: 0.79 },
-    },
-    fallbackPricing: { in: 1, out: 2 },
+    // El catalogo de Groq cambia seguido: estos ids salieron de su propia API
+    // (`pnpm models groq`), no de memoria. Si algo falla con "model not found",
+    // volve a correr ese comando antes que suponer.
     models: {
-      light: 'llama-3.1-8b-instant',
-      standard: 'llama-3.3-70b-versatile',
-      deep: 'llama-3.3-70b-versatile',
-      swarm: 'llama-3.3-70b-versatile',
+      light: 'openai/gpt-oss-20b',
+      standard: 'qwen/qwen3.8-27b',
+      deep: 'openai/gpt-oss-120b',
+      swarm: 'openai/gpt-oss-20b',
     },
+    // Sin tabla de precios propia: no la se y no la voy a inventar. El
+    // fallback conservador hace que el barrido los marque como estimados.
+    fallbackPricing: { in: 0.5, out: 1 },
   },
   xai: {
     label: 'xAI / Grok',
@@ -354,6 +353,8 @@ export interface PricedModel {
    * el que existe para los pedidos que ese modelo no puede resolver.
    */
   tiers: LlmTier[];
+  /** El precio salio del fallback del preset, no de una tabla. */
+  estimated: boolean;
 }
 
 /** Todos los modelos con precio conocido, como `proveedor:modelo`. */
@@ -368,12 +369,28 @@ export function pricedModels(): PricedModel[] {
 
     if (preset.local) {
       for (const m of new Set(Object.values(preset.models))) {
-        out.push({ spec: `${nombre}:${m}`, price: { in: 0, out: 0 }, local: true, tiers: tiersDe(m) });
+        out.push({ spec: `${nombre}:${m}`, price: { in: 0, out: 0 }, local: true, tiers: tiersDe(m), estimated: false });
       }
       continue;
     }
+
     for (const [m, price] of Object.entries(preset.pricing ?? {})) {
-      out.push({ spec: `${nombre}:${m}`, price, local: false, tiers: tiersDe(m) });
+      out.push({ spec: `${nombre}:${m}`, price, local: false, tiers: tiersDe(m), estimated: false });
+    }
+
+    /**
+     * Los modelos que el preset designa por escalon entran igual aunque no
+     * tengan precio propio, usando el fallback y marcados como estimados.
+     *
+     * Sin esto, un proveedor con precios desconocidos quedaba invisible para
+     * el afinador aunque estuviera configurado y andando: no se lo podia ni
+     * considerar, que es peor que considerarlo con un precio conservador.
+     */
+    if (preset.fallbackPricing) {
+      for (const m of new Set(Object.values(preset.models))) {
+        if (preset.pricing?.[m]) continue;
+        out.push({ spec: `${nombre}:${m}`, price: preset.fallbackPricing, local: false, tiers: tiersDe(m), estimated: true });
+      }
     }
   }
   return out;

@@ -157,14 +157,21 @@ async function barrer(spec: string | undefined): Promise<void> {
   const perfil = JSON.parse(raw) as Perfil;
   const base: PresetName = isPresetName(perfil.backend) ? perfil.backend : 'openai';
 
-  console.log(`\n${C.bold('Barrido de configuraciones')}`);
-  console.log(C.dim(`  perfil de ${perfil.origen} · ${perfil.pedidos.length} pedidos · ${perfil.creado.slice(0, 16)}\n`));
+  const json = process.argv.includes('--json');
+  const log = (...args: unknown[]): void => {
+    // Con --json no se imprime nada mas: cualquier linea suelta rompe el
+    // parseo de quien lo consume, que fue exactamente lo que paso.
+    if (!json) console.log(...args);
+  };
+
+  log(`\n${C.bold('Barrido de configuraciones')}`);
+  log(C.dim(`  perfil de ${perfil.origen} · ${perfil.pedidos.length} pedidos · ${perfil.creado.slice(0, 16)}\n`));
 
   // --- Donde se va la plata -------------------------------------------------
   const actual = configActual(base);
   const { total: costoActual } = costoDe(perfil, actual, base);
 
-  console.log(C.bold('  Donde se va la plata'));
+  log(C.bold('  Donde se va la plata'));
   for (const tier of TIERS) {
     const pedidos = perfil.pedidos.filter((p) => p.porTier[tier]);
     if (pedidos.length === 0) continue;
@@ -175,18 +182,18 @@ async function barrer(spec: string | undefined): Promise<void> {
     const llamadas = pedidos.reduce((a, p) => a + p.porTier[tier]!.calls, 0);
     const { total } = costoDe(perfil, { [tier]: actual[tier] }, base);
     const parte = costoActual > 0 ? (total / costoActual) * 100 : 0;
-    console.log(
+    log(
       `    ${tier.padEnd(9)} ${String(llamadas).padStart(3)} llamada(s)  ${String(tokens).padStart(7)} tok  ` +
         `$${total.toFixed(5)}  ${C.dim(`${parte.toFixed(0)}% del total`)}`,
     );
   }
   const reflex = perfil.pedidos.filter((p) => p.tier === 'reflex').length;
-  if (reflex) console.log(C.dim(`    reflex    ${reflex} pedido(s) sin ninguna llamada`));
+  if (reflex) log(C.dim(`    reflex    ${reflex} pedido(s) sin ninguna llamada`));
 
   const mayor = TIERS.map((t) => ({ tier: t, costo: costoDe(perfil, { [t]: actual[t] }, base).total }))
     .sort((a, b) => b.costo - a.costo)[0];
   if (mayor && costoActual > 0 && mayor.costo / costoActual > 0.5) {
-    console.log(
+    log(
       C.yellow(
         `\n    El ${((mayor.costo / costoActual) * 100).toFixed(0)}% se va en ${mayor.tier}: ` +
           `cambiar ese escalon solo rinde mas que optimizar todos los demas juntos.`,
@@ -220,25 +227,6 @@ async function barrer(spec: string | undefined): Promise<void> {
 
   const proponibles = candidatos.filter((c) => disponible(c.spec));
 
-  console.log(`\n${C.bold('  Que costaria cada modelo, por escalon')}  ${C.dim('(solo modelos con precio conocido)')}`);
-
-  for (const tier of TIERS) {
-    if (!perfil.pedidos.some((p) => p.porTier[tier])) continue;
-    const opciones = candidatos
-      .map((c) => ({ spec: c.spec, costo: costoDe(perfil, { [tier]: c.spec }, base).total }))
-      .sort((a, b) => a.costo - b.costo);
-
-    const actualCosto = costoDe(perfil, { [tier]: actual[tier] }, base).total;
-    console.log(`\n    ${C.bold(tier)}  ${C.dim(`actual ${actual[tier]} → $${actualCosto.toFixed(5)}`)}`);
-    for (const o of opciones.slice(0, 5)) {
-      const delta = actualCosto > 0 ? (1 - o.costo / actualCosto) * 100 : 0;
-      const marca =
-        o.spec === actual[tier] ? C.yellow('← actual') : delta > 0 ? C.green(`${delta.toFixed(0)}% menos`) : C.dim(`${Math.abs(delta).toFixed(0)}% mas`);
-      console.log(`      ${o.spec.padEnd(34)} $${o.costo.toFixed(5)}  ${marca}`);
-    }
-  }
-
-  // --- Configuraciones completas -------------------------------------------
   /**
    * Candidatos para un escalon: los modelos que algun preset designa para ese
    * escalon, mas los del escalon inmediatamente inferior.
@@ -251,18 +239,53 @@ async function barrer(spec: string | undefined): Promise<void> {
    */
   const ORDEN: LlmTier[] = ['light', 'standard', 'deep'];
   const aptosPara = (tier: LlmTier): typeof proponibles => {
-    const i = ORDEN.indexOf(tier);
-    const permitidos = new Set<LlmTier>([tier, 'swarm']);
-    if (i > 0) permitidos.add(ORDEN[i - 1]!);
+    // `swarm` no entra en los demas escalones: los modelos que un preset le
+    // asigna suelen ser de gama media, y colarlos en `deep` propone un 20B
+    // para el escalon mas exigente.
+    const permitidos = new Set<LlmTier>([tier]);
+    if (tier === 'swarm') {
+      permitidos.add('standard').add('deep');
+    } else {
+      const i = ORDEN.indexOf(tier);
+      if (i > 0) permitidos.add(ORDEN[i - 1]!);
+    }
     const aptos = proponibles.filter((c) => c.tiers.some((t) => permitidos.has(t)));
     return aptos.length > 0 ? aptos : proponibles;
   };
 
   const masBarato = (tier: LlmTier): string =>
     aptosPara(tier)
-      .map((c) => ({ spec: c.spec, costo: costoDe(perfil, { [tier]: c.spec }, base).total }))
-      .sort((a, b) => a.costo - b.costo)[0]!.spec;
+      .map((c) => ({
+        spec: c.spec,
+        costo: costoDe(perfil, { [tier]: c.spec }, base).total,
+        // Con precios empatados —pasa cuando varios usan el fallback del
+        // preset— gana el que ese preset designa para este escalon.
+        exacto: c.tiers.includes(tier) ? 0 : 1,
+      }))
+      .sort((a, b) => a.costo - b.costo || a.exacto - b.exacto)[0]!.spec;
 
+
+  log(`\n${C.bold('  Que costaria cada modelo, por escalon')}  ${C.dim('(solo modelos con precio conocido)')}`);
+
+  for (const tier of TIERS) {
+    if (!perfil.pedidos.some((p) => p.porTier[tier])) continue;
+    const opciones = proponibles
+      .filter((c) => aptosPara(tier).includes(c))
+      .map((c) => ({ spec: c.spec, costo: costoDe(perfil, { [tier]: c.spec }, base).total }))
+      .sort((a, b) => a.costo - b.costo);
+
+    const actualCosto = costoDe(perfil, { [tier]: actual[tier] }, base).total;
+    log(`\n    ${C.bold(tier)}  ${C.dim(`actual ${actual[tier]} → $${actualCosto.toFixed(5)}`)}`);
+    for (const o of opciones.slice(0, 5)) {
+      const delta = actualCosto > 0 ? (1 - o.costo / actualCosto) * 100 : 0;
+      const marca =
+        o.spec === actual[tier] ? C.yellow('← actual') : delta > 0 ? C.green(`${delta.toFixed(0)}% menos`) : C.dim(`${Math.abs(delta).toFixed(0)}% mas`);
+      const est = candidatos.find((c) => c.spec === o.spec)?.estimated ? C.yellow(' ~est') : '';
+      log(`      ${o.spec.padEnd(34)} $${o.costo.toFixed(5)}  ${marca}${est}`);
+    }
+  }
+
+  // --- Configuraciones completas -------------------------------------------
   // El escalon que se lleva mas plata: cambiar ese solo suele dar casi todo el ahorro.
   const dominante = TIERS.map((t) => ({ tier: t, costo: costoDe(perfil, { [t]: actual[t] }, base).total }))
     .sort((a, b) => b.costo - a.costo)[0]!;
@@ -283,25 +306,25 @@ async function barrer(spec: string | undefined): Promise<void> {
     },
   ];
 
-  console.log(`\n${C.bold('  Configuraciones completas')}`);
+  log(`\n${C.bold('  Configuraciones completas')}`);
   for (const p of propuestas) {
     const { total, inciertos } = costoDe(perfil, p.config, base);
     const delta = costoActual > 0 ? (1 - total / costoActual) * 100 : 0;
     const etiqueta = p.etiqueta === 'actual' ? C.yellow('actual') : delta > 0 ? C.green(`${delta.toFixed(0)}% menos`) : C.dim('sin cambio');
-    console.log(`\n    ${C.bold(p.etiqueta.padEnd(28))} $${total.toFixed(5)}  ${etiqueta}`);
-    console.log(C.dim(`      ${nombre(p.config)}`));
-    if (inciertos.size) console.log(C.yellow(`      ⚠ precio estimado para: ${[...inciertos].join(', ')}`));
+    log(`\n    ${C.bold(p.etiqueta.padEnd(28))} $${total.toFixed(5)}  ${etiqueta}`);
+    log(C.dim(`      ${nombre(p.config)}`));
+    if (inciertos.size) log(C.yellow(`      ⚠ precio estimado para: ${[...inciertos].join(', ')}`));
   }
 
   const sinCredencial = [...new Set(candidatos.filter((c) => !c.local && !disponible(c.spec)).map((c) => parseTierSpec(c.spec).preset))];
   if (sinCredencial.length && !todosLosProveedores) {
-    console.log(
+    log(
       C.dim(`\n    Sin credencial, no se proponen: ${sinCredencial.join(', ')}.`) +
         C.dim(' Con --all-providers se incluyen igual.'),
     );
   }
   if (!incluirLocales) {
-    console.log(C.dim('    Los modelos locales cuestan 0 y aparecen arriba; --include-local los propone.'));
+    log(C.dim('    Los modelos locales cuestan 0 y aparecen arriba; --include-local los propone.'));
   }
 
   /**
@@ -310,13 +333,17 @@ async function barrer(spec: string | undefined): Promise<void> {
    */
   const recomendada = propuestas.find((p) => p.etiqueta.startsWith('solo cambiar')) ?? propuestas[1];
 
-  if (process.argv.includes('--json')) {
+  if (json) {
     console.log(
       JSON.stringify(
         {
           perfil: { origen: perfil.origen, pedidos: perfil.pedidos.length, backend: perfil.backend },
           actual: { config: actual, costo: costoActual },
-          propuestas: propuestas.map((p) => ({ etiqueta: p.etiqueta, config: p.config, costo: costoDe(perfil, p.config, base).total })),
+          propuestas: propuestas.map((p) => ({
+            etiqueta: p.etiqueta,
+            config: p.config,
+            costo: costoDe(perfil, p.config, base).total,
+          })),
           recomendada: recomendada?.config,
         },
         null,
@@ -334,15 +361,22 @@ async function barrer(spec: string | undefined): Promise<void> {
   }
 
   console.log(
-    C.dim(
-      '\n  Dos limites de este barrido, medidos:\n' +
-        '\n  1. El numero es direccional, no exacto. La aritmetica asume que los tokens\n' +
-        '     no cambian al cambiar de modelo, y si cambian: otro modelo escribe mas o\n' +
-        '     menos, y decide distinto cuando usar una herramienta. En una validacion\n' +
-        '     real, un 67% predicho dio 31%. El orden de las opciones se mantuvo.\n' +
-        '\n  2. Solo mide plata. Un modelo mas barato puede responder peor y eso no\n' +
-        '     aparece aca: validalo con `pnpm eval:quality` antes de dejarlo fijo.\n',
-    ),
+    C.yellow('\n  Lo que este barrido NO sabe, medido:\n') +
+      C.dim(
+        '\n  1. Asume que los tokens no cambian al cambiar de modelo. Es falso, y con\n' +
+          '     modelos de razonamiento es gravemente falso: sobre el mismo prompt,\n' +
+          '     gpt-oss-120b emitio 3072 tokens de salida contra 965 de gpt-4.1. Aun\n' +
+          '     costando menos por token, salio mas caro. Dos validaciones reales:\n' +
+          '     67% predicho dio 31%, y 72% predicho dio 13%. El ORDEN de las opciones\n' +
+          '     se sostuvo en las dos; la magnitud, no.\n' +
+          '\n     Despues de aplicar una configuracion, volve a perfilar con ella para\n' +
+          '     tener el numero de verdad:\n' +
+          '       ORCHESTATI_MODEL_DEEP=<el nuevo> pnpm tune --profile\n' +
+          '\n  2. Solo mide plata. Un modelo mas barato puede responder peor y eso no\n' +
+          '     aparece aca: validalo con `pnpm eval:quality` antes de dejarlo fijo.\n' +
+          '\n  3. No mira los limites de rate. Una opcion mas barata que no aguanta tu\n' +
+          '     concurrencia no es mas barata, es inviable.\n',
+      ),
   );
 }
 

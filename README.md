@@ -267,7 +267,9 @@ Requests can come from your saved sessions (`--from=sessions`), a file with one 
 
 The sweep reports three things — where the money goes (tokens and calls per tier), what each priced model would cost on each tier, and a few complete configurations with the env vars to try them. Models whose price came from the conservative fallback rather than the table are flagged, so you know which numbers are solid.
 
-**The sweep predicts direction, not magnitude.** Its arithmetic assumes token counts stay put when the model changes, and they do not — a different model writes more or less, and decides differently about reaching for a tool. Validating one recommendation end to end, a predicted 67% saving came out at 31%. The *ranking* of the options held, which is what you actually need from it.
+**The sweep predicts direction, not magnitude.** Its arithmetic assumes token counts stay put when the model changes, and they do not. Two recommendations validated end to end: a predicted 67% saving came out at 31%, and a predicted 72% came out at 13%. The *ranking* of the options held both times, which is what you actually need from it.
+
+The second gap has a sharp cause worth knowing: **reasoning models break the assumption badly.** On the same prompt, `openai/gpt-oss-120b` emitted 3,072 output tokens against `gpt-4.1`'s 965. At a third of the price per token it still came out more expensive. After applying a configuration, re-profile with it (`ORCHESTATI_MODEL_DEEP=… pnpm tune --profile`) to get the real number.
 
 It also only measures money. A cheaper model can answer worse and that does not show up here, which is what `pnpm eval:quality` is for. Running that loop on the bundled set:
 
