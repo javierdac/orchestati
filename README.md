@@ -323,10 +323,25 @@ pnpm eval b                           # ídem sobre el set de control
 pnpm test
 ```
 
-Sin `AI_GATEWAY_API_KEY` el sistema usa `MockModel`: **el ruteo es real, las
-respuestas no**. Sirve para desarrollar y testear el orquestador entero sin gastar
-un peso. Con la key, las mismas decisiones pegan contra modelos de verdad vía
-Vercel AI Gateway (los modelos se configuran por env, ver `.env.example`).
+Sin credenciales el sistema usa `MockModel`: **el ruteo es real, las respuestas
+no**. Sirve para desarrollar y testear el orquestador entero sin gastar un peso.
+
+Para pegarle a modelos de verdad alcanza con exportar una key — el resto lo
+resuelve solo (`.env.example` tiene todas las opciones):
+
+| Backend | Variable | Nota |
+|---|---|---|
+| **Gemini** | `GEMINI_API_KEY` | tiene nivel gratuito; se usa vía su endpoint compatible con OpenAI |
+| **Groq** | `GROQ_API_KEY` | nivel gratuito, corre modelos de pesos abiertos |
+| OpenRouter | `OPENROUTER_API_KEY` | |
+| Vercel AI Gateway | `AI_GATEWAY_API_KEY` | una key para todos los proveedores |
+| Ollama / LM Studio | — | local; **hay que pedirlo** con `ORCHESTATI_PROVIDER=ollama` |
+
+Todo menos el gateway pasa por un único cliente compatible con OpenAI, así que
+agregar un destino nuevo es agregar un preset, no un proveedor.
+
+Los backends locales **no se autodetectan a propósito**: que un servidor esté
+escuchando en el puerto no significa que uno quiera usarlo.
 
 Los precios por tier salen de una tabla en `src/llm/model.ts` (tarifas de primera
 parte de Anthropic, referencia 2026-06). Alimenta el corte por presupuesto, así

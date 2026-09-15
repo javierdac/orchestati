@@ -31,7 +31,7 @@ const C = {
   red: (s: string) => `\x1b[31m${s}\x1b[0m`,
 };
 
-const model = createModelClient();
+const model = await createModelClient();
 if (model.kind === 'mock') {
   console.error(
     C.red('\nNo hay credenciales: esto correria contra el MockModel y no probaria nada.\n') +

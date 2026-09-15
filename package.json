@@ -22,7 +22,8 @@
     "smoke": "tsx src/dev/smoke.ts"
   },
   "dependencies": {
-    "ai": "^6.0.0",
+    "@ai-sdk/openai-compatible": "^3.0.48",
+    "ai": "^7.0.101",
     "zod": "^3.24.1"
   },
   "devDependencies": {

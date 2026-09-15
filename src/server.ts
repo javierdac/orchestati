@@ -208,7 +208,8 @@ export function createOrchestatiServer(opts: ServerOptions = {}) {
 const esteArchivo = fileURLToPath(import.meta.url);
 if (process.argv[1] && (process.argv[1] === esteArchivo || esteArchivo.startsWith(process.argv[1]))) {
   const port = Number(process.env.PORT ?? 3000);
-  const app = createOrchestatiServer({ port });
+  const { createModelClient } = await import('./llm/model.js');
+  const app = createOrchestatiServer({ port, model: await createModelClient() });
   void app.listen(port).then((p) => {
     console.log(`orchestati escuchando en http://127.0.0.1:${p}`);
     console.log(`  POST /chat  ·  POST /chat/stream (SSE)  ·  POST /inspect  ·  GET /agents`);

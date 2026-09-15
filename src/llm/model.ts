@@ -1,11 +1,11 @@
+import { AiSdkModel, type LlmTier, type ResolvedModel } from './ai-sdk-base.js';
+import { OpenAICompatibleModel, PRESETS, isPresetName, presetsWithCredentials } from './openai-compatible.js';
 import type { ModelClient, ModelRequest, ModelResponse, Tier, ToolCall } from '../core/types.js';
 
 /**
  * Capa de modelo. El orquestador nunca habla con un proveedor directamente:
  * pide un `tier` logico y esta capa lo mapea a un modelo concreto.
  */
-
-type LlmTier = Exclude<Tier, 'reflex'>;
 
 const DEFAULT_MODELS: Record<LlmTier, string> = {
   light: 'anthropic/claude-haiku-4-5',
@@ -51,131 +51,19 @@ export function estimateCost(model: string, inputTokens: number, outputTokens: n
  * Cliente real via Vercel AI Gateway. Usa strings "provider/model", asi que
  * cambiar de proveedor es cambiar una variable de entorno.
  */
-export class GatewayModel implements ModelClient {
+export class GatewayModel extends AiSdkModel {
   readonly kind = 'gateway';
 
-  async generate(req: ModelRequest): Promise<ModelResponse> {
-    const started = Date.now();
-    const model = modelForTier(req.tier);
-
-    const { generateText } = await import('ai');
-
-    const res = await generateText({
-      model,
-      ...(req.system ? { system: req.system } : {}),
-      messages: buildMessages(req) as never,
-      ...(buildTools(req) ? { tools: buildTools(req) as never } : {}),
-      ...(req.maxOutputTokens ? { maxOutputTokens: req.maxOutputTokens } : {}),
-      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-      ...(req.signal ? { abortSignal: req.signal } : {}),
-    });
-
-    const inputTokens = res.usage?.inputTokens ?? 0;
-    const outputTokens = res.usage?.outputTokens ?? 0;
-
-    const toolCalls: ToolCall[] = (res.toolCalls ?? []).map((tc) => ({
-      id: (tc as { toolCallId: string }).toolCallId,
-      name: (tc as { toolName: string }).toolName,
-      args: (tc as { input?: unknown }).input,
-    }));
-
-    return {
-      text: res.text,
-      model,
-      usage: {
-        inputTokens,
-        outputTokens,
-        costUsd: estimateCost(model, inputTokens, outputTokens),
-        ms: Date.now() - started,
-      },
-      ...(toolCalls.length ? { toolCalls } : {}),
-    };
+  protected resolveModel(tier: LlmTier): ResolvedModel {
+    // El gateway acepta el string "provider/model" directamente, asi que
+    // cambiar de proveedor es cambiar una variable de entorno.
+    const id = modelForTier(tier);
+    return { id, model: id };
   }
 
-  /** Igual que `generate`, pero emitiendo el texto a medida que llega. */
-  async generateStream(req: ModelRequest, onDelta: (delta: string) => void): Promise<ModelResponse> {
-    const started = Date.now();
-    const model = modelForTier(req.tier);
-
-    const { streamText } = await import('ai');
-    const result = streamText({
-      model,
-      ...(req.system ? { system: req.system } : {}),
-      messages: buildMessages(req) as never,
-      ...(buildTools(req) ? { tools: buildTools(req) as never } : {}),
-      ...(req.maxOutputTokens ? { maxOutputTokens: req.maxOutputTokens } : {}),
-      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-      ...(req.signal ? { abortSignal: req.signal } : {}),
-    });
-
-    for await (const delta of result.textStream) onDelta(delta);
-
-    const [text, usage, rawCalls] = await Promise.all([result.text, result.usage, result.toolCalls]);
-    const inputTokens = usage?.inputTokens ?? 0;
-    const outputTokens = usage?.outputTokens ?? 0;
-
-    const toolCalls: ToolCall[] = (rawCalls ?? []).map((tc) => ({
-      id: (tc as { toolCallId: string }).toolCallId,
-      name: (tc as { toolName: string }).toolName,
-      args: (tc as { input?: unknown }).input,
-    }));
-
-    return {
-      text,
-      model,
-      usage: {
-        inputTokens,
-        outputTokens,
-        costUsd: estimateCost(model, inputTokens, outputTokens),
-        ms: Date.now() - started,
-      },
-      ...(toolCalls.length ? { toolCalls } : {}),
-    };
+  protected costOf(id: string, inputTokens: number, outputTokens: number): number {
+    return estimateCost(id, inputTokens, outputTokens);
   }
-}
-
-/**
- * Reconstruye el ida y vuelta de herramientas para que el modelo vea lo que
- * pidio y lo que le contestamos.
- */
-function buildMessages(req: ModelRequest): unknown[] {
-  const messages: unknown[] = [
-    ...(req.history ?? []).map((m) => ({ role: m.role, content: m.content })),
-    { role: 'user', content: req.prompt },
-  ];
-
-  for (const turn of req.toolTurns ?? []) {
-    messages.push({
-      role: 'assistant',
-      content: turn.calls.map((c) => ({
-        type: 'tool-call',
-        toolCallId: c.id,
-        toolName: c.name,
-        input: c.args,
-      })),
-    });
-    messages.push({
-      role: 'tool',
-      content: turn.results.map((r) => ({
-        type: 'tool-result',
-        toolCallId: r.id,
-        toolName: r.name,
-        output: { type: 'text', value: r.content },
-      })),
-    });
-  }
-  return messages;
-}
-
-/**
- * Se pasan sin `execute`: asi el SDK devuelve la intencion de llamada en vez de
- * ejecutarla, y el gate de confirmacion sigue siendo nuestro.
- */
-function buildTools(req: ModelRequest): Record<string, unknown> | undefined {
-  if (!req.tools?.length) return undefined;
-  return Object.fromEntries(
-    req.tools.map((t) => [t.name, { description: t.description, inputSchema: t.schema }]),
-  );
 }
 
 /**
@@ -282,8 +170,39 @@ function planToolCall(req: ModelRequest): ToolCall | undefined {
   return undefined;
 }
 
-/** Devuelve el cliente real si hay credenciales; si no, el mock. */
-export function createModelClient(): ModelClient {
-  const hasKey = Boolean(process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN);
-  return hasKey ? new GatewayModel() : new MockModel();
+/**
+ * Elige el backend.
+ *
+ * Orden: lo que diga `ORCHESTATI_PROVIDER`, si no el gateway con credenciales,
+ * si no el primer endpoint compatible que tenga key (Gemini, Groq, OpenRouter),
+ * si no el mock.
+ *
+ * Los backends locales (ollama, lmstudio) NO se autodetectan: hay que pedirlos
+ * explicitamente con `ORCHESTATI_PROVIDER=ollama`. Que un servidor este
+ * escuchando no significa que se lo quiera usar.
+ */
+export async function createModelClient(): Promise<ModelClient> {
+  const forzado = process.env.ORCHESTATI_PROVIDER?.trim().toLowerCase();
+
+  if (forzado === 'mock') return new MockModel();
+  if (forzado === 'gateway') return new GatewayModel();
+  if (forzado && isPresetName(forzado)) {
+    return new OpenAICompatibleModel(PRESETS[forzado], forzado).init();
+  }
+  if (forzado) throw new Error(`ORCHESTATI_PROVIDER desconocido: ${forzado}`);
+
+  if (process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN) return new GatewayModel();
+
+  const conKey = presetsWithCredentials()[0];
+  if (conKey) return new OpenAICompatibleModel(PRESETS[conKey], conKey).init();
+
+  return new MockModel();
+}
+
+/** Version sincronica, para constructores que no pueden esperar. */
+export function createModelClientSync(): ModelClient {
+  const forzado = process.env.ORCHESTATI_PROVIDER?.trim().toLowerCase();
+  if (forzado === 'gateway') return new GatewayModel();
+  if (process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN) return new GatewayModel();
+  return new MockModel();
 }

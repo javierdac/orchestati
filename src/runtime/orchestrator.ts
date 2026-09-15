@@ -3,7 +3,7 @@ import { createDefaultRegistry } from '../agents/index.js';
 import { Router } from '../router/router.js';
 import type { RouterOptions } from '../router/router.js';
 import { AgentRegistry } from '../router/registry.js';
-import { createModelClient } from '../llm/model.js';
+import { createModelClientSync } from '../llm/model.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { EventQueue } from '../core/events.js';
 import { InMemorySessionStore, type SessionStore } from './session.js';
@@ -98,7 +98,9 @@ export class Orchestrator {
   constructor(opts: OrchestratorOptions = {}) {
     this.registry = opts.registry ?? createDefaultRegistry();
     this.router = opts.router ?? new Router(this.registry, opts.routerOptions ?? {});
-    this.model = opts.model ?? createModelClient();
+    // El constructor es sincronico: para autodetectar un modelo local hay que
+    // pasar el cliente ya resuelto con `await createModelClient()`.
+    this.model = opts.model ?? createModelClientSync();
     this.logger = opts.logger ?? silentLogger;
     this.services = {
       model: this.model,

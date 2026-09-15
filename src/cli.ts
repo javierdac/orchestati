@@ -181,7 +181,7 @@ async function main(): Promise<void> {
   const args = argv.filter((a) => !a.startsWith('--'));
   const input = args.join(' ').trim();
 
-  const model = createModelClient();
+  const model = await createModelClient();
   const confirm = choosePolicy(flags);
   const orchestrator = new Orchestrator({
     model,
