@@ -5,6 +5,9 @@ import type { RouterOptions } from '../router/router.js';
 import { AgentRegistry } from '../router/registry.js';
 import { createModelClient } from '../llm/model.js';
 import { ToolRegistry } from '../tools/registry.js';
+import { EventQueue } from '../core/events.js';
+import { InMemorySessionStore, type SessionStore } from './session.js';
+import type { EventSink, OrchestrationEvent } from '../core/events.js';
 import { createDefaultToolRegistry } from '../tools/index.js';
 import { autoSafe } from '../tools/confirm.js';
 import type { ConfirmationPolicy, ToolCallRecord } from '../tools/types.js';
@@ -41,6 +44,8 @@ export interface OrchestratorOptions {
   confirm?: ConfirmationPolicy;
   /** Raiz del sandbox de archivos. Por defecto, el directorio actual. */
   root?: string;
+  /** Memoria conversacional. Por defecto, en memoria del proceso. */
+  sessions?: SessionStore;
   /** Presupuesto por defecto de cada corrida. */
   maxCostUsd?: number;
   maxMs?: number;
@@ -49,9 +54,13 @@ export interface OrchestratorOptions {
 
 export interface RunOptions {
   history?: Message[];
+  /** Si viene, el historial se lee y se escribe en esa sesion. */
+  sessionId?: string;
   signal?: AbortSignal;
   maxCostUsd?: number;
   maxMs?: number;
+  /** Recibe cada evento de la orquestacion mientras ocurre. */
+  onEvent?: EventSink;
 }
 
 const silentLogger: Logger = {
@@ -84,6 +93,7 @@ export class Orchestrator {
   private maxCostUsd: number;
   private maxMs: number;
   private maxEscalations: number;
+  readonly sessions: SessionStore;
 
   constructor(opts: OrchestratorOptions = {}) {
     this.registry = opts.registry ?? createDefaultRegistry();
@@ -100,6 +110,32 @@ export class Orchestrator {
     this.maxCostUsd = opts.maxCostUsd ?? 0.5;
     this.maxMs = opts.maxMs ?? 120_000;
     this.maxEscalations = opts.maxEscalations ?? 2;
+    this.sessions = opts.sessions ?? new InMemorySessionStore();
+  }
+
+  /**
+   * Igual que `run`, pero consumible con `for await`. La traza es parte del
+   * producto: una UI necesita ver que agente trabaja y que herramienta corre,
+   * no solo el texto final.
+   */
+  stream(input: string, opts: RunOptions = {}): AsyncIterable<OrchestrationEvent> {
+    const queue = new EventQueue<OrchestrationEvent>();
+    const userSink = opts.onEvent;
+
+    void this.run(input, {
+      ...opts,
+      onEvent: (event) => {
+        queue.push(event);
+        userSink?.(event);
+      },
+    })
+      .then(() => queue.close())
+      .catch((err: unknown) => {
+        queue.push({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+        queue.close();
+      });
+
+    return queue;
   }
 
   /** Solo analiza, sin ejecutar nada. Util para inspeccionar el ruteo. */
@@ -110,7 +146,12 @@ export class Orchestrator {
 
   async run(input: string, opts: RunOptions = {}): Promise<OrchestrationResult> {
     const tracer = new Tracer();
+    const emit: EventSink = opts.onEvent ?? (() => {});
     const signals = analyze(input);
+
+    // El historial explicito gana; si no, se lee de la sesion.
+    const history =
+      opts.history ?? (opts.sessionId ? await this.sessions.history(opts.sessionId) : []);
 
     tracer.push('analyze', `intent=${signals.primaryIntent} complejidad=${signals.complexity.toFixed(2)}`, {
       tier: signals.suggestedTier,
@@ -119,6 +160,7 @@ export class Orchestrator {
       confidence: Number(signals.confidence.toFixed(2)),
       capabilities: signals.requiredCapabilities,
     });
+    emit({ type: 'analyze', signals });
 
     const budget: Budget = {
       maxCostUsd: opts.maxCostUsd ?? this.maxCostUsd,
@@ -142,8 +184,18 @@ export class Orchestrator {
         `${decision.strategy} -> ${decision.agents.join(' + ')}${decision.synthesizer ? ` | sintetiza ${decision.synthesizer}` : ''}`,
         { tier: decision.tier, reason: decision.reason, top: decision.ranking.slice(0, 3) },
       );
+      emit({ type: 'route', decision });
 
-      const run = await this.execute(decision, { input, signals, budget, tracer, escalations, ...opts });
+      const run = await this.execute(decision, {
+        input,
+        signals,
+        budget,
+        tracer,
+        escalations,
+        emit,
+        ...opts,
+        history,
+      });
       outputs = [...outputs, ...run.outputs];
       text = run.text;
 
@@ -156,6 +208,7 @@ export class Orchestrator {
       escalations++;
       minTier = to;
       tracer.push('escalate', `${from} -> ${to}: ${run.escalate.reason}`, { escalations });
+      emit({ type: 'escalate', from, to, reason: run.escalate.reason });
       decision = this.router.route(signals, minTier);
     }
 
@@ -175,7 +228,25 @@ export class Orchestrator {
       { escalations, ms: usage.ms },
     );
 
-    return { text, signals, decision, outputs, trace: tracer.all(), usage, escalations, toolCalls };
+    if (opts.sessionId && text) {
+      await this.sessions.append(opts.sessionId, [
+        { role: 'user', content: input },
+        { role: 'assistant', content: text },
+      ]);
+    }
+
+    const result: OrchestrationResult = {
+      text,
+      signals,
+      decision,
+      outputs,
+      trace: tracer.all(),
+      usage,
+      escalations,
+      toolCalls,
+    };
+    emit({ type: 'done', result });
+    return result;
   }
 
   // -------------------------------------------------------------------------
@@ -190,6 +261,7 @@ export class Orchestrator {
       budget: Budget;
       tracer: Tracer;
       escalations: number;
+      emit: EventSink;
       history?: Message[];
       signal?: AbortSignal;
     },
@@ -243,6 +315,7 @@ export class Orchestrator {
 
         if (decision.synthesizer && useful.length > 1 && !this.exhausted(env.budget)) {
           env.tracer.push('synthesize', `${decision.synthesizer} fusiona ${useful.length} salidas`);
+          env.emit({ type: 'synthesize', agentId: decision.synthesizer, inputs: useful.length });
           const synth = await this.invoke(this.registry.get(decision.synthesizer), useful, env);
           return { text: synth.text, outputs: [...settled, synth] };
         }
@@ -266,11 +339,13 @@ export class Orchestrator {
       budget: Budget;
       tracer: Tracer;
       escalations: number;
+      emit: EventSink;
       history?: Message[];
       signal?: AbortSignal;
     },
   ): Promise<AgentOutput> {
     env.tracer.push('agent:start', `${agent.id} (${agent.tier})`);
+    env.emit({ type: 'agent-start', agentId: agent.id, tier: agent.tier });
 
     const ctx: AgentContext = {
       input: env.input,
@@ -281,6 +356,8 @@ export class Orchestrator {
       services: this.services,
       depth: env.escalations,
       ...(env.signal ? { signal: env.signal } : {}),
+      onDelta: (delta) => env.emit({ type: 'text', agentId: agent.id, delta }),
+      onToolCall: (record) => env.emit({ type: 'tool', agentId: agent.id, record }),
     };
 
     const out = await agent.run(ctx);
@@ -314,6 +391,7 @@ export class Orchestrator {
         chars: out.text.length,
       },
     );
+    env.emit({ type: 'agent-end', agentId: agent.id, output: out });
 
     return out;
   }

@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orchestati</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --border: #272e38; --text: #e6edf3;
+    --dim: #8b949e; --accent: #58a6ff;
+    --reflex: #3fb950; --light: #58a6ff; --standard: #d29922; --deep: #bc8cff; --swarm: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.2px; }
+  .sub { color: var(--dim); font-size: 13px; margin: 0 0 20px; }
+  form { display: flex; gap: 8px; margin-bottom: 20px; }
+  input[type=text] {
+    flex: 1; min-width: 0; padding: 11px 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  button {
+    padding: 11px 18px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--accent); color: #05101f; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; color: var(--dim); font-weight: 400; }
+  .examples { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
+  .examples button {
+    background: var(--panel); color: var(--dim); border: 1px solid var(--border);
+    padding: 5px 10px; font-size: 12px; font-weight: 400; border-radius: 999px;
+  }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 5px; color: #05101f;
+  }
+  .pipe { color: var(--dim); font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .meta { color: var(--dim); font-size: 12px; margin-top: 6px; }
+  .answer { white-space: pre-wrap; word-wrap: break-word; margin-top: 10px; }
+  .answer:empty::after { content: '…'; color: var(--dim); }
+  .tool { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 3px 0; }
+  .ok { color: var(--reflex); } .no { color: var(--swarm); } .warn { color: var(--standard); }
+  .bar { height: 5px; border-radius: 3px; background: #21262d; overflow: hidden; margin: 6px 0; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  details summary { cursor: pointer; color: var(--dim); font-size: 12px; }
+  pre { margin: 8px 0 0; font-size: 11.5px; color: var(--dim); white-space: pre-wrap; }
+  .trace { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><h1>Orchestati</h1><span class="sub" style="margin:0">ruteo local · 0 tokens</span></header>
+  <p class="sub">Escribí un pedido. El análisis y la decisión de ruteo pasan antes de tocar un modelo.</p>
+
+  <form id="f">
+    <input type="text" id="q" placeholder="hola  ·  o pedile algo difícil" autocomplete="off" autofocus>
+    <button id="go">Enviar</button>
+    <button type="button" class="ghost" id="reset">Limpiar</button>
+  </form>
+
+  <div class="examples" id="ex"></div>
+  <div id="out"></div>
+</div>
+
+<script type="module">
+const EJEMPLOS = [
+  'hola',
+  'que es un closure en javascript',
+  'cuanto es (2340 * 15) / 100',
+  'explicame que hace el archivo src/router/router.ts',
+  'mi app tira TypeError: cannot read property map of undefined',
+  'investiga y compara opciones de base de datos vectorial, despues un plan y ademas costos',
+];
+
+const TIERS = { reflex: '--reflex', light: '--light', standard: '--standard', deep: '--deep', swarm: '--swarm' };
+const $ = (s) => document.querySelector(s);
+const out = $('#out');
+
+let sessionId = localStorage.getItem('orchestati.session');
+if (!sessionId) {
+  sessionId = 'web-' + Math.random().toString(36).slice(2, 10);
+  localStorage.setItem('orchestati.session', sessionId);
+}
+
+for (const e of EJEMPLOS) {
+  const b = document.createElement('button');
+  b.textContent = e;
+  b.onclick = () => { $('#q').value = e; $('#f').requestSubmit(); };
+  $('#ex').append(b);
+}
+
+$('#reset').onclick = async () => {
+  out.innerHTML = '';
+  await fetch('/session/' + sessionId, { method: 'DELETE' });
+};
+
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+};
+
+$('#f').onsubmit = async (ev) => {
+  ev.preventDefault();
+  const input = $('#q').value.trim();
+  if (!input) return;
+  $('#q').value = '';
+  $('#go').disabled = true;
+
+  const card = el('div', 'card');
+  const head = el('div', 'row');
+  const pedido = el('div', 'meta', '› ' + input);
+  const answer = el('div', 'answer');
+  const tools = el('div');
+  card.append(pedido, head, tools, answer);
+  out.prepend(card);
+
+  let primario = null;
+
+  try {
+    const res = await fetch('/chat/stream', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ input, sessionId }),
+    });
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+
+      const bloques = buf.split('\n\n');
+      buf = bloques.pop() ?? '';
+      for (const bloque of bloques) {
+        const linea = bloque.split('\n').find((l) => l.startsWith('data: '));
+        if (!linea) continue;
+        manejar(JSON.parse(linea.slice(6)));
+      }
+    }
+  } catch (err) {
+    answer.append(el('div', 'no', 'error: ' + err.message));
+  }
+  $('#go').disabled = false;
+
+  function manejar(e) {
+    if (e.type === 'analyze') {
+      const s = e.signals;
+      const d = el('details');
+      d.append(el('summary', null,
+        `análisis · ${s.primaryIntent} · complejidad ${s.complexity.toFixed(2)} · confianza ${s.confidence.toFixed(2)} [${s.intentSource}]`));
+      const bar = el('div', 'bar');
+      const i = el('i'); i.style.width = (s.complexity * 100).toFixed(0) + '%';
+      bar.append(i);
+      const desglose = Object.entries(s.complexityBreakdown)
+        .filter(([, v]) => v > 0.001).sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => `${k.padEnd(12)} ${v.toFixed(3)}`).join('\n');
+      d.append(bar, el('pre', null, desglose +
+        (s.semanticTop ? `\n\nsemántico: ${s.semanticTop.intent} ${s.semanticTop.evidence.join(' ')}` : '')));
+      card.insertBefore(d, answer);
+    }
+
+    if (e.type === 'route') {
+      const d = e.decision;
+      const badge = el('span', 'badge', d.tier);
+      badge.style.background = `var(${TIERS[d.tier] ?? '--light'})`;
+      head.append(badge, el('span', 'pipe',
+        d.strategy + ' · ' + d.agents.join(' → ') + (d.synthesizer ? ' → ' + d.synthesizer : '')));
+      primario = d.synthesizer ?? d.agents[d.agents.length - 1];
+      if (d.strategy === 'direct') primario = d.agents[0];
+    }
+
+    if (e.type === 'text' && e.agentId === primario) answer.append(e.delta);
+
+    if (e.type === 'tool') {
+      const r = e.record;
+      const marca = r.approved ? (r.result.ok ? '✓' : '✗') : '⊘';
+      const cls = r.approved ? (r.result.ok ? 'ok' : 'warn') : 'no';
+      tools.append(el('div', 'tool ' + cls,
+        `${marca} ${r.call.name}${r.approved ? '' : ' (no autorizada)'}`));
+    }
+
+    if (e.type === 'escalate') {
+      tools.append(el('div', 'tool warn', `↑ escalado ${e.from} → ${e.to}: ${e.reason}`));
+    }
+
+    if (e.type === 'done') {
+      const r = e.result;
+      if (!answer.textContent) answer.textContent = r.text;
+      const d = el('details');
+      d.append(el('summary', null,
+        `traza · ${r.outputs.length} agente(s) · ${r.toolCalls.length} herramienta(s) · $${r.usage.costUsd.toFixed(5)} · ${r.usage.ms}ms`));
+      d.append(el('pre', 'trace', r.trace.map((t) =>
+        `${String(t.ms).padStart(5)}ms  ${t.type.padEnd(12)} ${t.label}`).join('\n')));
+      card.append(d);
+    }
+
+    if (e.type === 'error') answer.append(el('div', 'no', 'error: ' + e.message));
+  }
+};
+</script>
+</body>
+</html>

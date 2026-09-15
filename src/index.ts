@@ -1,4 +1,5 @@
 export * from './core/types.js';
+export * from './core/events.js';
 export * from './analysis/analyzer.js';
 export * from './analysis/lexicon.js';
 export * from './analysis/arbiter.js';

@@ -11,7 +11,7 @@ import { flatPrototypes } from '../src/analysis/semantic/prototypes.js';
 import { arbitrate, SEMANTIC_FLOOR_FILL, SEMANTIC_FLOOR_OVERRIDE } from '../src/analysis/arbiter.js';
 import { analyze } from '../src/analysis/analyzer.js';
 import { normalize } from '../src/analysis/lexicon.js';
-import { EVAL_SET } from '../src/dev/eval-set.js';
+import { EVAL_SET, EVAL_SET_B } from '../src/dev/eval-set.js';
 import type { ScoredIntent } from '../src/core/types.js';
 
 const idfOn = (texts: string[]) => new IdfModel(texts.map(extractFeatures));
@@ -203,17 +203,29 @@ describe('analizador con semantico', () => {
 });
 
 describe('regresion de accuracy', () => {
-  const accuracy = (semantic: boolean): number => {
-    const ok = EVAL_SET.filter(
+  const accuracy = (set: typeof EVAL_SET, semantic: boolean): number => {
+    const ok = set.filter(
       (c) => analyze(c.text, semantic ? {} : { semantic: false }).primaryIntent === c.expected,
     ).length;
-    return ok / EVAL_SET.length;
+    return ok / set.length;
   };
 
-  it('el semantico mejora al lexico sobre el set held-out', () => {
-    const conSemantico = accuracy(true);
-    expect(conSemantico).toBeGreaterThan(accuracy(false));
+  it('el semantico mejora al lexico sobre el set A', () => {
+    const con = accuracy(EVAL_SET, true);
+    expect(con).toBeGreaterThan(accuracy(EVAL_SET, false));
     // Piso de regresion: si un cambio futuro baja de aca, el test avisa.
-    expect(conSemantico).toBeGreaterThanOrEqual(0.7);
+    expect(con).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it('tambien sobre el set de control, que no se uso para ajustar nada', () => {
+    const con = accuracy(EVAL_SET_B, true);
+    expect(con).toBeGreaterThan(accuracy(EVAL_SET_B, false));
+    expect(con).toBeGreaterThanOrEqual(0.75);
+  });
+
+  it('los prototipos no se escribieron copiando los sets de evaluacion', () => {
+    const protos = new Set(flatPrototypes().map((p) => normalize(p.text)));
+    const filtrados = [...EVAL_SET, ...EVAL_SET_B].filter((c) => protos.has(normalize(c.text)));
+    expect(filtrados).toEqual([]);
   });
 });

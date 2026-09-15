@@ -81,25 +81,27 @@ frases que no están en ningún lado del código, el léxico solo acierta el
 **35.5%** — el resto cae en `unknown`.
 
 La red es un clasificador local: n-gramas de caracteres (3–5) hasheados con pesos
-TF-IDF, comparados por coseno contra 156 frases prototipo etiquetadas. **Sin
+TF-IDF, comparados por coseno contra 223 frases prototipo etiquetadas. **Sin
 dependencias, sin descargas, sin tokens.** Los n-gramas de caracteres son los que
 hacen el trabajo: "refactorizame", "refactorizar" y "refactor" comparten casi
 todos sus trigramas, así que caen juntos sin que nadie escriba la regla — y de
 paso absorben los errores de tipeo, que es justo donde el léxico se rompe.
 
 ```
-$ pnpm eval
-Evaluacion de intencion — 62 casos held-out
+$ pnpm eval            $ pnpm eval b
+set A · 62 casos       set B · 39 casos (control)
 
-  solo lexico        35.5%
-  lexico + semantico 74.2%
-
-  ✓ 24 que el lexico erraba y el semantico acerto
-      "tengo un deadlock en la base y no se por que"  unknown → code_debug
-      "que estructura le damos al sistema nuevo"      unknown → planning
-      "tirame ideas de nombres para el proyecto"      unknown → creative
-      ...
+  solo lexico   35.5%    solo lexico   23.1%
+  + semantico   82.3%    + semantico   79.5%
 ```
+
+**Dos sets, y el segundo es el que importa.** Medir muchas veces contra el mismo
+set held-out lo va gastando: cada ajuste que uno hace mirando sus errores lo
+convierte de a poco en un set de entrenamiento. El set B se escribió *antes* de
+ampliar los prototipos y sin mirar los fallos del A. Cuando amplié la cobertura,
+el A subió 8 puntos y **el B, que nunca miré, subió 18** — así que la ganancia
+generaliza en vez de sobreajustar. Un test verifica además que ninguna frase de
+evaluación aparezca textual entre los prototipos.
 
 **Dos umbrales, porque son dos decisiones distintas.** Midiendo la calibración del
 score: con similitud ≥ 0.30 el clasificador acierta el **100%** de las veces, con
@@ -252,6 +254,55 @@ Después de cada corrida el router recibe feedback y actualiza su memoria
 (EWMA por par intención↔agente, persistida en `.orchestati/memory.json`), así que
 el ruteo mejora con el uso.
 
+### 7. Streaming, sesiones y servidor
+
+**El streaming acá no es sólo texto token a token.** Una UI necesita saber *qué
+agente* está trabajando, qué herramienta corrió y cuándo el sistema decidió
+escalar — la traza es parte del producto, no un log. Por eso `stream()` emite
+eventos tipados:
+
+```ts
+for await (const ev of orchestrator.stream('refactorizame esto')) {
+  if (ev.type === 'route')       mostrarPipeline(ev.decision);
+  if (ev.type === 'tool')        mostrarHerramienta(ev.record);
+  if (ev.type === 'text')        escribir(ev.delta);   // ev.agentId dice de quién
+  if (ev.type === 'escalate')    avisar(ev.from, ev.to);
+  if (ev.type === 'done')        cerrar(ev.result);
+}
+```
+
+En `parallel` hay tres agentes escribiendo a la vez: por eso cada evento de texto
+lleva su `agentId`, y el consumidor decide cuál renderizar (la CLI muestra sólo
+el que produce la respuesta final).
+
+**Sesiones** — `InMemorySessionStore` o `FileSessionStore` (JSONL append-only, un
+archivo por sesión, así dos procesos no se pisan). El historial se recorta por
+los últimos N turnos.
+
+```ts
+await o.run('escribime un parser de CSV', { sessionId: 'javier' });
+await o.run('ahora pasalo a python',      { sessionId: 'javier' });  // tiene contexto
+```
+
+**Servidor HTTP** — `node:http`, sin framework:
+
+```bash
+pnpm serve      # http://127.0.0.1:3000
+```
+
+| Endpoint | Qué hace |
+|---|---|
+| `POST /chat` | ejecuta y devuelve el resultado completo |
+| `POST /chat/stream` | lo mismo, como SSE evento por evento |
+| `POST /inspect` | análisis + decisión de ruteo, **sin ejecutar** |
+| `GET /agents` | el pool con tiers, capacidades y costos |
+| `GET` · `DELETE /session/:id` | historial de una sesión |
+| `GET /` | UI de demostración: pipeline, herramientas y traza en vivo |
+
+Del otro lado de un HTTP **no hay a quién preguntarle** si autoriza un `rm`. Por
+eso la política por defecto del servidor es `autoSafe` —lectura sí, escritura
+no— y subirla es una decisión explícita de quien lo levanta.
+
 ## Uso
 
 ```bash
@@ -263,9 +314,12 @@ pnpm dev --trace "<pedido>"           # ejecuta e imprime la traza
 pnpm dev --json "<pedido>"            # salida estructurada
 pnpm dev --dry-run "<pedido>"         # deniega toda herramienta: qué *haría*
 pnpm dev --yes "<pedido>"             # autoriza herramientas sin preguntar
+pnpm dev --no-session "<pedido>"      # sin historial de conversación
 pnpm dev                              # modo interactivo (pregunta cada acción)
+pnpm serve                            # servidor HTTP + SSE + UI de demo
 pnpm table                            # banco de calibración del ruteo
-pnpm eval                             # accuracy del clasificador, held-out
+pnpm eval                             # accuracy del clasificador (set A)
+pnpm eval b                           # ídem sobre el set de control
 pnpm test
 ```
 
@@ -286,6 +340,17 @@ res.decision.ranking;  // por qué ganó ese
 res.usage.costUsd;     // qué costó
 res.toolCalls;         // qué herramientas usó, y cuáles le denegaron
 res.trace;             // qué pasó, paso a paso
+```
+
+Con streaming y memoria de conversación:
+
+```ts
+import { Orchestrator, FileSessionStore } from 'orchestati';
+
+const o = new Orchestrator({ sessions: new FileSessionStore() });
+for await (const ev of o.stream('refactorizame esto', { sessionId: 'javier' })) {
+  if (ev.type === 'text') process.stdout.write(ev.delta);
+}
 ```
 
 Para controlar qué puede tocar:
@@ -329,13 +394,13 @@ interfaz `Agent` directamente — `src/agents/reflex.ts` es el ejemplo.
 
 ## Estado
 
-82 tests cubren el analizador, el ranking del router, el bucle de escalado, el
+119 tests cubren el analizador, el ranking del router, el bucle de escalado, el
 corte por presupuesto, la tolerancia a fallos, el loop de herramientas, la
-contención del sandbox (escape de rutas, allowlist de binarios, SSRF, `eval`) y
-el clasificador semántico — **incluido un piso de accuracy sobre el set held-out**,
-así que una regresión en el ruteo rompe el build en vez de pasar desapercibida.
+contención del sandbox (escape de rutas, allowlist de binarios, SSRF, `eval`), el
+clasificador semántico, las sesiones, el streaming y los endpoints del servidor
+— **incluidos pisos de accuracy sobre los dos sets held-out**, así que una
+regresión en el ruteo rompe el build en vez de pasar desapercibida.
 
-Lo que todavía no está: streaming, memoria conversacional más allá del historial
-en curso, y el 26% del set held-out que el clasificador sigue errando — los
-prototipos son data de entrenamiento y admiten más cobertura, pero no los ajusté
-contra el set de evaluación para no inflar el número.
+Lo que todavía no está: el ~20% de los sets de evaluación que el clasificador
+sigue errando, y las herramientas ejecutables desde el servidor con un gate
+interactivo real (hoy el servidor se queda en sólo-lectura a propósito).

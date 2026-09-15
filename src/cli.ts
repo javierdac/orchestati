@@ -3,10 +3,11 @@ import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { Orchestrator } from './runtime/orchestrator.js';
 import { FileRouterMemory } from './router/memory.js';
+import { FileSessionStore } from './runtime/session.js';
 import { createModelClient } from './llm/model.js';
 import { allowAll, askUser, autoSafe, denyAll } from './tools/confirm.js';
 import type { ConfirmationPolicy, ConfirmationRequest } from './tools/types.js';
-import type { Message, OrchestrationResult } from './core/types.js';
+import type { OrchestrationResult } from './core/types.js';
 
 const C = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -110,20 +111,68 @@ function printTrace(res: OrchestrationResult): void {
   );
 }
 
-function printResult(res: OrchestrationResult, opts: { trace: boolean }): void {
-  const tint = TIER_COLOR[res.decision.tier] ?? C.cyan;
-  console.log(
-    `\n${tint(`[${res.decision.tier}]`)} ${C.dim(`${res.decision.strategy} · ${res.decision.agents.join(' → ')}`)}`,
-  );
+/**
+ * Ejecuta mostrando el progreso a medida que ocurre: primero la decision de
+ * ruteo, despues las herramientas, y el texto token a token.
+ */
+async function runStreaming(
+  orchestrator: Orchestrator,
+  input: string,
+  opts: { trace: boolean; sessionId?: string },
+): Promise<OrchestrationResult | undefined> {
+  let primario: string | undefined;
+  let resultado: OrchestrationResult | undefined;
+  let abrioTexto = false;
 
-  for (const rec of res.toolCalls) {
-    const tint2 = RISK_COLOR[rec.risk] ?? C.dim;
-    const mark = rec.approved ? (rec.result.ok ? '✓' : '✗') : '⊘';
-    console.log(C.dim(`  ${mark} ${tint2(rec.call.name)} ${rec.approved ? '' : '(no autorizada)'}`));
+  for await (const ev of orchestrator.stream(input, {
+    ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+  })) {
+    switch (ev.type) {
+      case 'route': {
+        const d = ev.decision;
+        const tint = TIER_COLOR[d.tier] ?? C.cyan;
+        console.log(
+          `\n${tint(`[${d.tier}]`)} ${C.dim(`${d.strategy} · ${d.agents.join(' → ')}${d.synthesizer ? ` → ${d.synthesizer}` : ''}`)}`,
+        );
+        // Solo se imprime el texto del agente que produce la respuesta final:
+        // en paralelo hay tres escribiendo a la vez y se leeria como ruido.
+        primario =
+          d.strategy === 'direct' ? d.agents[0] : (d.synthesizer ?? d.agents.at(-1));
+        break;
+      }
+      case 'tool': {
+        const r = ev.record;
+        const tint = RISK_COLOR[r.risk] ?? C.dim;
+        const marca = r.approved ? (r.result.ok ? '✓' : '✗') : '⊘';
+        console.log(C.dim(`  ${marca} ${tint(r.call.name)}${r.approved ? '' : ' (no autorizada)'}`));
+        break;
+      }
+      case 'escalate':
+        console.log(C.yellow(`  ↑ escalado ${ev.from} → ${ev.to}: ${ev.reason}`));
+        break;
+      case 'text':
+        if (ev.agentId === primario) {
+          if (!abrioTexto) {
+            stdout.write('\n');
+            abrioTexto = true;
+          }
+          stdout.write(ev.delta);
+        }
+        break;
+      case 'done':
+        resultado = ev.result;
+        if (!abrioTexto) console.log(`\n${ev.result.text}`);
+        console.log('\n');
+        if (opts.trace) printTrace(ev.result);
+        break;
+      case 'error':
+        console.error(C.red(`\nerror: ${ev.message}`));
+        break;
+      default:
+        break;
+    }
   }
-
-  console.log(`\n${res.text}\n`);
-  if (opts.trace) printTrace(res);
+  return resultado;
 }
 
 async function main(): Promise<void> {
@@ -138,8 +187,12 @@ async function main(): Promise<void> {
     model,
     confirm,
     root: process.cwd(),
+    sessions: new FileSessionStore(),
     routerOptions: { memory: new FileRouterMemory('.orchestati/memory.json') },
   });
+
+  // Una sesion por terminal: los pedidos de una misma corrida se acumulan.
+  const sessionId = flags.has('--no-session') ? undefined : `cli-${process.ppid}`;
 
   if (flags.has('--help')) {
     console.log(`
@@ -153,8 +206,12 @@ ${C.bold('orchestati')} — orquestador dinamico de agentes
     --explain   solo analisis + ruteo, sin ejecutar
     --trace     imprime la traza de ejecucion
     --json      salida en JSON
-    --yes       autoriza las herramientas sin preguntar
-    --dry-run   deniega toda herramienta: muestra que *haria* el agente
+    --yes         autoriza las herramientas sin preguntar
+    --dry-run     deniega toda herramienta: muestra que *haria* el agente
+    --no-session  no guarda ni lee historial de conversacion
+
+  ${C.bold('servidor')}
+    pnpm serve                    HTTP + SSE en http://127.0.0.1:3000
 `);
     return;
   }
@@ -170,20 +227,23 @@ ${C.bold('orchestati')} — orquestador dinamico de agentes
   }
 
   if (input) {
-    const res = await orchestrator.run(input);
     if (flags.has('--json')) {
+      const res = await orchestrator.run(input, { ...(sessionId ? { sessionId } : {}) });
       console.log(JSON.stringify(res, null, 2));
     } else {
-      printResult(res, { trace: flags.has('--trace') });
+      await runStreaming(orchestrator, input, {
+        trace: flags.has('--trace'),
+        ...(sessionId ? { sessionId } : {}),
+      });
     }
     return;
   }
 
   // Modo interactivo
   const rl = readline();
-  const history: Message[] = [];
-  console.log(C.dim('modo interactivo · /explain <texto> · /trace · /salir\n'));
+  console.log(C.dim('modo interactivo · /explain <texto> · /trace · /nueva · /salir\n'));
   let showTrace = flags.has('--trace');
+  let sesion = sessionId ?? 'cli';
 
   for (;;) {
     const line = (await rl.question(C.bold('› '))).trim();
@@ -194,13 +254,17 @@ ${C.bold('orchestati')} — orquestador dinamico de agentes
       console.log(C.dim(`traza ${showTrace ? 'on' : 'off'}`));
       continue;
     }
+    if (line === '/nueva') {
+      await orchestrator.sessions.clear(sesion);
+      sesion = `cli-${Date.now()}`;
+      console.log(C.dim('sesion nueva'));
+      continue;
+    }
     if (line.startsWith('/explain ')) {
       printExplain(orchestrator, line.slice(9));
       continue;
     }
-    const res = await orchestrator.run(line, { history });
-    printResult(res, { trace: showTrace });
-    history.push({ role: 'user', content: line }, { role: 'assistant', content: res.text });
+    await runStreaming(orchestrator, line, { trace: showTrace, sessionId: sesion });
   }
   rl.close();
 }

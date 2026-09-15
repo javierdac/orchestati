@@ -90,3 +90,62 @@ export const EVAL_SET: EvalCase[] = [
   { text: 'ejecutá el suite de tests', expected: 'tool_action' },
   { text: 'fijate si compila', expected: 'tool_action' },
 ];
+
+/**
+ * Segundo set, escrito ANTES de ampliar los prototipos y sin mirar los fallos
+ * del primero. Existe porque medir muchas veces contra el mismo set held-out lo
+ * va gastando: cada ajuste que uno hace mirando sus errores lo convierte de a
+ * poco en un set de entrenamiento. Este queda como control.
+ */
+export const EVAL_SET_B: EvalCase[] = [
+  { text: 'buenas, como andas', expected: 'greeting' },
+  { text: 'un abrazo, hablamos', expected: 'farewell' },
+  { text: 'perfecto, te agradezco', expected: 'thanks' },
+  { text: 'contame de vos', expected: 'identity' },
+
+  { text: 'que es la memoria virtual', expected: 'factual_qa' },
+  { text: 'para que sirve un balanceador de carga', expected: 'factual_qa' },
+  { text: 'como se instala postgres en ubuntu', expected: 'howto' },
+  { text: 'que pasos hay para firmar una app de ios', expected: 'howto' },
+
+  { text: 'necesito una clase que maneje una cola con prioridad', expected: 'code_generate' },
+  { text: 'armame un validador de tarjetas de credito', expected: 'code_generate' },
+  { text: 'quiero un cliente http con reintentos', expected: 'code_generate' },
+
+  { text: 'me da timeout cuando llamo a la api externa', expected: 'code_debug' },
+  { text: 'la app crashea al abrir la pantalla de perfil', expected: 'code_debug' },
+  { text: 'los tests fallan de manera intermitente', expected: 'code_debug' },
+  { text: 'IndexError: list index out of range en el loop principal', expected: 'code_debug' },
+
+  { text: 'que significa esta linea del codigo', expected: 'code_explain' },
+  { text: 'no entiendo como esta implementado el cache', expected: 'code_explain' },
+
+  { text: 'este archivo quedo muy largo, hay que dividirlo', expected: 'refactor' },
+  { text: 'quiero desacoplar estas dos capas', expected: 'refactor' },
+  { text: 'se puede simplificar toda esta cadena de ifs', expected: 'refactor' },
+
+  { text: 'que base de datos nos conviene para series temporales', expected: 'research' },
+  { text: 'quiero ver que hay dando vueltas para autenticacion', expected: 'research' },
+  { text: 'vale la pena pasarse a typescript', expected: 'research' },
+
+  { text: 'necesito ordenar las tareas del proximo mes', expected: 'planning' },
+  { text: 'como dividimos este epic en historias', expected: 'planning' },
+  { text: 'definamos las fases del rediseño', expected: 'planning' },
+
+  { text: 'cuanto es 1800 menos el 30 por ciento', expected: 'math' },
+  { text: 'necesito sumar estas cifras y sacar el total', expected: 'math' },
+  { text: 'que nos dicen las metricas de retencion', expected: 'data_analysis' },
+  { text: 'hay estacionalidad en estos datos', expected: 'data_analysis' },
+
+  { text: 'necesito esto escrito en italiano', expected: 'translate' },
+  { text: 'traducime el mensaje de error', expected: 'translate' },
+  { text: 'resumime la reunion en cinco puntos', expected: 'summarize' },
+  { text: 'quiero una version corta para el equipo', expected: 'summarize' },
+
+  { text: 'pensemos nombres para la nueva feature', expected: 'creative' },
+  { text: 'necesito el texto de la landing', expected: 'creative' },
+
+  { text: 'levantá el servidor de desarrollo', expected: 'tool_action' },
+  { text: 'hace un commit con estos cambios', expected: 'tool_action' },
+  { text: 'chequea el estado del repositorio', expected: 'tool_action' },
+];

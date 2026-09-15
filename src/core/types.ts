@@ -141,6 +141,10 @@ export interface AgentContext {
   /** Profundidad de escalado actual (0 = primer intento). */
   depth: number;
   signal?: AbortSignal;
+  /** Si viene, el agente emite el texto a medida que lo produce. */
+  onDelta?: (delta: string) => void;
+  /** Si viene, el agente avisa cada herramienta apenas la termina. */
+  onToolCall?: (record: ToolCallRecord) => void;
 }
 
 export interface Message {
@@ -262,6 +266,12 @@ export interface ModelClient {
   /** Nombre del backend real en uso ("gateway" | "mock"). */
   readonly kind: string;
   generate(req: ModelRequest): Promise<ModelResponse>;
+  /**
+   * Igual que `generate`, pero avisando cada fragmento de texto apenas llega.
+   * Es opcional: si un cliente no lo implementa, el orquestador usa `generate`
+   * y emite el texto completo de una.
+   */
+  generateStream?(req: ModelRequest, onDelta: (delta: string) => void): Promise<ModelResponse>;
 }
 
 /** Lo que el modelo necesita saber de una herramienta para poder pedirla. */

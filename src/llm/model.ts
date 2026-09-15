@@ -44,47 +44,11 @@ export class GatewayModel implements ModelClient {
 
     const { generateText } = await import('ai');
 
-    const messages: unknown[] = [
-      ...(req.history ?? []).map((m) => ({ role: m.role, content: m.content })),
-      { role: 'user', content: req.prompt },
-    ];
-
-    // Se reconstruye el ida y vuelta de herramientas para que el modelo vea
-    // lo que pidio y lo que le contestamos.
-    for (const turn of req.toolTurns ?? []) {
-      messages.push({
-        role: 'assistant',
-        content: turn.calls.map((c) => ({
-          type: 'tool-call',
-          toolCallId: c.id,
-          toolName: c.name,
-          input: c.args,
-        })),
-      });
-      messages.push({
-        role: 'tool',
-        content: turn.results.map((r) => ({
-          type: 'tool-result',
-          toolCallId: r.id,
-          toolName: r.name,
-          output: { type: 'text', value: r.content },
-        })),
-      });
-    }
-
-    // Se pasan sin `execute`: asi el SDK devuelve la intencion de llamada en
-    // vez de ejecutarla, y el gate de confirmacion sigue siendo nuestro.
-    const tools = req.tools?.length
-      ? Object.fromEntries(
-          req.tools.map((t) => [t.name, { description: t.description, inputSchema: t.schema }]),
-        )
-      : undefined;
-
     const res = await generateText({
       model,
       ...(req.system ? { system: req.system } : {}),
-      messages: messages as never,
-      ...(tools ? { tools: tools as never } : {}),
+      messages: buildMessages(req) as never,
+      ...(buildTools(req) ? { tools: buildTools(req) as never } : {}),
       ...(req.maxOutputTokens ? { maxOutputTokens: req.maxOutputTokens } : {}),
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
       ...(req.signal ? { abortSignal: req.signal } : {}),
@@ -111,6 +75,91 @@ export class GatewayModel implements ModelClient {
       ...(toolCalls.length ? { toolCalls } : {}),
     };
   }
+
+  /** Igual que `generate`, pero emitiendo el texto a medida que llega. */
+  async generateStream(req: ModelRequest, onDelta: (delta: string) => void): Promise<ModelResponse> {
+    const started = Date.now();
+    const model = modelForTier(req.tier);
+
+    const { streamText } = await import('ai');
+    const result = streamText({
+      model,
+      ...(req.system ? { system: req.system } : {}),
+      messages: buildMessages(req) as never,
+      ...(buildTools(req) ? { tools: buildTools(req) as never } : {}),
+      ...(req.maxOutputTokens ? { maxOutputTokens: req.maxOutputTokens } : {}),
+      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+      ...(req.signal ? { abortSignal: req.signal } : {}),
+    });
+
+    for await (const delta of result.textStream) onDelta(delta);
+
+    const [text, usage, rawCalls] = await Promise.all([result.text, result.usage, result.toolCalls]);
+    const inputTokens = usage?.inputTokens ?? 0;
+    const outputTokens = usage?.outputTokens ?? 0;
+
+    const toolCalls: ToolCall[] = (rawCalls ?? []).map((tc) => ({
+      id: (tc as { toolCallId: string }).toolCallId,
+      name: (tc as { toolName: string }).toolName,
+      args: (tc as { input?: unknown }).input,
+    }));
+
+    return {
+      text,
+      model,
+      usage: {
+        inputTokens,
+        outputTokens,
+        costUsd: estimateCost(model, inputTokens, outputTokens),
+        ms: Date.now() - started,
+      },
+      ...(toolCalls.length ? { toolCalls } : {}),
+    };
+  }
+}
+
+/**
+ * Reconstruye el ida y vuelta de herramientas para que el modelo vea lo que
+ * pidio y lo que le contestamos.
+ */
+function buildMessages(req: ModelRequest): unknown[] {
+  const messages: unknown[] = [
+    ...(req.history ?? []).map((m) => ({ role: m.role, content: m.content })),
+    { role: 'user', content: req.prompt },
+  ];
+
+  for (const turn of req.toolTurns ?? []) {
+    messages.push({
+      role: 'assistant',
+      content: turn.calls.map((c) => ({
+        type: 'tool-call',
+        toolCallId: c.id,
+        toolName: c.name,
+        input: c.args,
+      })),
+    });
+    messages.push({
+      role: 'tool',
+      content: turn.results.map((r) => ({
+        type: 'tool-result',
+        toolCallId: r.id,
+        toolName: r.name,
+        output: { type: 'text', value: r.content },
+      })),
+    });
+  }
+  return messages;
+}
+
+/**
+ * Se pasan sin `execute`: asi el SDK devuelve la intencion de llamada en vez de
+ * ejecutarla, y el gate de confirmacion sigue siendo nuestro.
+ */
+function buildTools(req: ModelRequest): Record<string, unknown> | undefined {
+  if (!req.tools?.length) return undefined;
+  return Object.fromEntries(
+    req.tools.map((t) => [t.name, { description: t.description, inputSchema: t.schema }]),
+  );
 }
 
 /**
@@ -121,6 +170,17 @@ export class MockModel implements ModelClient {
   readonly kind = 'mock';
 
   constructor(private latencyMs = 0) {}
+
+  /** Corta la respuesta en fragmentos para ejercitar el camino de streaming. */
+  async generateStream(req: ModelRequest, onDelta: (delta: string) => void): Promise<ModelResponse> {
+    const res = await this.generate(req);
+    const CHUNK = 16;
+    for (let i = 0; i < res.text.length; i += CHUNK) {
+      onDelta(res.text.slice(i, i + CHUNK));
+      if (this.latencyMs > 0) await new Promise((r) => setTimeout(r, this.latencyMs));
+    }
+    return res;
+  }
 
   async generate(req: ModelRequest): Promise<ModelResponse> {
     const started = Date.now();

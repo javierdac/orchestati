@@ -114,6 +114,8 @@ export function llmAgent(spec: LlmAgentSpec): Agent {
           tools: disponibles,
           request,
           maxSteps: spec.maxToolSteps ?? 4,
+          ...(ctx.onDelta ? { onDelta: ctx.onDelta } : {}),
+          ...(ctx.onToolCall ? { onToolCall: ctx.onToolCall } : {}),
         });
 
         return {
@@ -126,7 +128,11 @@ export function llmAgent(spec: LlmAgentSpec): Agent {
         };
       }
 
-      const res = await ctx.services.model.generate(request);
+      const model = ctx.services.model;
+      const res =
+        ctx.onDelta && model.generateStream
+          ? await model.generateStream(request, ctx.onDelta)
+          : await model.generate(request);
 
       return {
         agentId: spec.id,

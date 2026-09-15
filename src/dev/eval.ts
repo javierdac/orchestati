@@ -3,7 +3,7 @@
  * Compara el lexico solo contra lexico + semantico.  `pnpm eval`
  */
 import { analyze } from '../analysis/analyzer.js';
-import { EVAL_SET, type EvalCase } from './eval-set.js';
+import { EVAL_SET, EVAL_SET_B, type EvalCase } from './eval-set.js';
 import type { Intent } from '../core/types.js';
 
 interface Outcome {
@@ -13,8 +13,12 @@ interface Outcome {
   source: string;
 }
 
+const SET_ARG = process.argv[2];
+const SET: EvalCase[] = SET_ARG === 'b' ? EVAL_SET_B : SET_ARG === 'all' ? [...EVAL_SET, ...EVAL_SET_B] : EVAL_SET;
+const SET_NAME = SET_ARG === 'b' ? 'B (control)' : SET_ARG === 'all' ? 'A + B' : 'A';
+
 function run(semantic: boolean): Outcome[] {
-  return EVAL_SET.map((c) => {
+  return SET.map((c) => {
     const s = analyze(c.text, semantic ? {} : { semantic: false });
     return { case: c, got: s.primaryIntent, ok: s.primaryIntent === c.expected, source: s.intentSource };
   });
@@ -33,7 +37,7 @@ const dim = (s: string): string => `\x1b[2m${s}\x1b[0m`;
 const green = (s: string): string => `\x1b[32m${s}\x1b[0m`;
 const red = (s: string): string => `\x1b[31m${s}\x1b[0m`;
 
-console.log(`\n${bold('Evaluacion de intencion')} — ${EVAL_SET.length} casos held-out\n`);
+console.log(`\n${bold('Evaluacion de intencion')} — set ${SET_NAME}, ${SET.length} casos held-out\n`);
 console.log(`  solo lexico        ${bold(pct(accuracy(soloLexico)))}`);
 console.log(`  lexico + semantico ${bold(pct(accuracy(conSemantico)))}\n`);
 

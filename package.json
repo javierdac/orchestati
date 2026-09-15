@@ -12,12 +12,13 @@
   },
   "scripts": {
     "dev": "tsx src/cli.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && cp -r src/ui dist/ui",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "table": "tsx src/dev/routing-table.ts",
-    "eval": "tsx src/dev/eval.ts"
+    "eval": "tsx src/dev/eval.ts",
+    "serve": "tsx src/server.ts"
   },
   "dependencies": {
     "ai": "^6.0.0",

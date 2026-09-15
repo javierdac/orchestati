@@ -23,6 +23,10 @@ export interface ToolLoopOptions {
   request: Omit<ModelRequest, 'tools' | 'toolTurns'>;
   maxSteps: number;
   onEvent?: (type: 'tool:call' | 'tool:denied', label: string, data?: Record<string, unknown>) => void;
+  /** Si viene, el texto del modelo se emite a medida que se genera. */
+  onDelta?: (delta: string) => void;
+  /** Se llama apenas termina cada herramienta, antes de volver al modelo. */
+  onToolCall?: (record: ToolCallRecord) => void;
 }
 
 export interface ToolLoopResult {
@@ -56,7 +60,7 @@ export function toSpec(tool: Tool): ToolSpec {
 }
 
 export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult> {
-  const { ctx, agentId, tools, request, maxSteps, onEvent } = opts;
+  const { ctx, agentId, tools, request, maxSteps, onEvent, onDelta, onToolCall } = opts;
   const specs = tools.map(toSpec);
   const byName = new Map(tools.map((t) => [t.name, t]));
 
@@ -73,7 +77,12 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       break;
     }
 
-    const res = await ctx.services.model.generate({ ...request, tools: specs, toolTurns: turns });
+    const call = { ...request, tools: specs, toolTurns: turns };
+    const client = ctx.services.model;
+    const res =
+      onDelta && client.generateStream
+        ? await client.generateStream(call, onDelta)
+        : await client.generate(call);
     usage = addUsage(usage, res.usage);
     model = res.model;
     text = res.text;
@@ -85,6 +94,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     for (const call of calls) {
       const record = await executeCall(call, byName, ctx, agentId, onEvent);
       records.push(record);
+      onToolCall?.(record);
       results.push({
         id: call.id,
         name: call.name,
