@@ -152,8 +152,23 @@ describe('SqlRouterMemory', () => {
     await m.flush();
 
     // Si el calculo viviera en el proceso, dos instancias se pisarian.
-    expect(c.calls[0]!.text).toMatch(/ON CONFLICT .* DO UPDATE/s);
-    expect(c.calls[0]!.text).toMatch(/score \* \(1 - \$5\) \+ \$4 \* \$5/);
+    const sql = c.calls[0]!.text;
+    expect(sql).toMatch(/ON CONFLICT .* DO UPDATE/s);
+    // El score nuevo se deriva del score que ya esta en la tabla.
+    expect(sql).toMatch(/score\s*=\s*orchestati_router_memory\.score/);
+  });
+
+  it('castea los parametros numericos explicitamente', async () => {
+    // Sin el cast, Postgres infiere el tipo de $5 desde `1 - $5` —donde el 1
+    // es un literal entero— y rechaza 0.25 con "invalid input syntax for
+    // type integer". Solo aparece contra una base real.
+    const c = new FakeSql();
+    const m = new SqlRouterMemory(c);
+    m.record('factual_qa', 'a', 1);
+    await m.flush();
+
+    expect(c.calls[0]!.text).toMatch(/\$5::double precision/);
+    expect(c.calls[0]!.text).toMatch(/\$3::double precision/);
   });
 
   it('prior() responde sin ir a la red', () => {

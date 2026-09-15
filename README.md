@@ -631,6 +631,7 @@ What is not there yet: the ~20% of the evaluation sets the classifier still gets
 
 | | |
 |---|---|
+| [MANUAL.md](MANUAL.md) | complete reference: commands, API, configuration, measurement |
 | [INTEGRATION.md](INTEGRATION.md) | putting Orchestati inside an existing application |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | working on Orchestati itself |
 | [README.es.md](README.es.md) | esta documentación en español |

@@ -8,6 +8,25 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+
+    # Los adaptadores se prueban contra servidores de verdad: los dobles no
+    # ejecutan el ON CONFLICT ni el script Lua, y ahi vivia un bug de tipos
+    # que solo aparecio corriendo Postgres.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: orchestati
+        ports: ['55432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['56379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 

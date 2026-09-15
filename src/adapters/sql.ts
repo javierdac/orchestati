@@ -117,6 +117,26 @@ const DEFAULT_PRIOR = 0.5;
 const ALPHA = 0.25;
 
 /**
+ * Aviso por defecto ante un fallo de escritura.
+ *
+ * Tragarse el error en silencio deja la memoria del router sin aprender nada
+ * y sin que nadie se entere — que es exactamente lo que paso al escribir esto:
+ * un error de tipos de Postgres se descarto sin dejar rastro. Se avisa una
+ * sola vez para no inundar los logs, y se recomienda pasar un `onError`.
+ */
+function avisarUnaVez(quien: string): (err: unknown) => void {
+  let avisado = false;
+  return (err: unknown) => {
+    if (avisado) return;
+    avisado = true;
+    console.warn(
+      `[orchestati] ${quien}: falló una escritura y no se pasó un onError, así que este es el único aviso. ` +
+        `El ruteo sigue funcionando con el caché local, pero no está aprendiendo nada. Causa: ${String(err).slice(0, 200)}`,
+    );
+  };
+}
+
+/**
  * Memoria del router en SQL.
  *
  * `prior()` es sincronico por contrato —se llama una vez por agente en cada
@@ -136,7 +156,7 @@ export class SqlRouterMemory implements RouterMemory {
   constructor(
     private client: SqlClient,
     tables: SqlTables = {},
-    private onError: (err: unknown) => void = () => {},
+    private onError: (err: unknown) => void = avisarUnaVez('SqlRouterMemory'),
   ) {
     this.tabla = tables.memory ?? DEFAULT_TABLES.memory;
   }
@@ -180,9 +200,15 @@ export class SqlRouterMemory implements RouterMemory {
     const primera = DEFAULT_PRIOR * (1 - w) + clamped * w;
     const p = this.client
       .query(
-        `INSERT INTO ${this.tabla} (intent, agent_id, score, n) VALUES ($1, $2, $3, 1)
+        // Los casts no son decorativos: sin ellos Postgres infiere el tipo de
+        // $5 desde `1 - $5`, donde el 1 es un literal entero, y rechaza 0.25
+        // con "invalid input syntax for type integer".
+        `INSERT INTO ${this.tabla} (intent, agent_id, score, n)
+         VALUES ($1, $2, $3::double precision, 1)
          ON CONFLICT (intent, agent_id) DO UPDATE
-         SET score = ${this.tabla}.score * (1 - $5) + $4 * $5, n = ${this.tabla}.n + 1`,
+         SET score = ${this.tabla}.score * (1 - $5::double precision)
+                   + $4::double precision * $5::double precision,
+             n = ${this.tabla}.n + 1`,
         [intent, agentId, primera, clamped, alpha],
       )
       .catch(this.onError)

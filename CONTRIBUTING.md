@@ -92,6 +92,18 @@ New tools need tests for the containment, not just the happy path. `tests/tools.
 
 **Scope.** Small, focused pull requests get reviewed faster. If a change requires recalibrating thresholds, say so explicitly rather than folding it in silently — threshold changes affect every request that flows through the system.
 
+### If you touched a storage adapter
+
+The unit tests use in-memory doubles, which cover the logic but never execute the `ON CONFLICT` or the Lua script — a Postgres type-inference bug lived in exactly that gap. Run the real ones:
+
+```bash
+docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=test -e POSTGRES_DB=orchestati postgres:16-alpine
+docker run -d --rm -p 56379:6379 redis:7-alpine
+pnpm test tests/adapters.integration.test.ts
+```
+
+They skip visibly when no server is listening, and CI runs them against service containers.
+
 ## Reporting bugs
 
 A routing bug is much easier to fix with the analyzer's own output attached:

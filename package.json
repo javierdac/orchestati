@@ -80,6 +80,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.0",
+    "redis": "^6.2.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

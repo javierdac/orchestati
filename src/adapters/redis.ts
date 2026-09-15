@@ -82,6 +82,19 @@ export class RedisSessionStore implements SessionStore {
 const DEFAULT_PRIOR = 0.5;
 const ALPHA = 0.25;
 
+/** Ver la nota en el adaptador SQL: el silencio total esconde el problema. */
+function avisarUnaVez(quien: string): (err: unknown) => void {
+  let avisado = false;
+  return (err: unknown) => {
+    if (avisado) return;
+    avisado = true;
+    console.warn(
+      `[orchestati] ${quien}: falló una escritura y no se pasó un onError, así que este es el único aviso. ` +
+        `El ruteo sigue funcionando con el caché local, pero no está aprendiendo nada. Causa: ${String(err).slice(0, 200)}`,
+    );
+  };
+}
+
 /**
  * El EWMA aplicado del lado de Redis.
  *
@@ -119,7 +132,7 @@ export class RedisRouterMemory implements RouterMemory {
   constructor(
     private client: RedisLike,
     private key = 'orchestati:router-memory',
-    private onError: (err: unknown) => void = () => {},
+    private onError: (err: unknown) => void = avisarUnaVez('RedisRouterMemory'),
   ) {}
 
   /** Trae todo a memoria. Llamalo antes de atender pedidos. */
