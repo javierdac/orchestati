@@ -9,6 +9,17 @@ import { AiSdkModel, type LlmTier, type ResolvedModel } from './ai-sdk-base.js';
  * Un solo cliente, un preset por destino.
  */
 
+export interface ModelLimits {
+  /** Peticiones por minuto. */
+  rpm?: number;
+  /** Tokens por minuto. Suele ser el que ata primero. */
+  tpm?: number;
+  /** Peticiones por dia. */
+  rpd?: number;
+  /** Tokens por dia. */
+  tpd?: number;
+}
+
 export interface EndpointPreset {
   /** Nombre legible del destino. */
   label: string;
@@ -30,6 +41,14 @@ export interface EndpointPreset {
    * Mandarsela igual es un 400, asi que se omite para esos.
    */
   omitTemperature?: RegExp;
+  /**
+   * Limites de uso por modelo, cuando se conocen.
+   *
+   * No es un detalle administrativo: una configuracion mas barata que no
+   * aguanta tu concurrencia no es mas barata, es inviable. El limite de tokens
+   * por minuto suele atar antes que el de peticiones.
+   */
+  limits?: Record<string, ModelLimits>;
   /** Corre en la maquina: sin costo y sin red. */
   local?: boolean;
 }
@@ -96,6 +115,14 @@ export const PRESETS = {
     // Sin tabla de precios propia: no la se y no la voy a inventar. El
     // fallback conservador hace que el barrido los marque como estimados.
     fallbackPricing: { in: 0.5, out: 1 },
+    // Limites del nivel gratuito, leidos de la consola de Groq (2026-09).
+    limits: {
+      'openai/gpt-oss-120b': { rpm: 30, tpm: 8_000, rpd: 1_000, tpd: 200_000 },
+      'openai/gpt-oss-20b': { rpm: 30, tpm: 8_000, rpd: 1_000, tpd: 200_000 },
+      'qwen/qwen3.8-27b': { rpm: 30, tpm: 8_000, rpd: 1_000, tpd: 200_000 },
+      'groq/compound': { rpm: 30, tpm: 70_000, rpd: 250 },
+      'allam-2-7b': { rpm: 30, tpm: 6_000, rpd: 7_000, tpd: 500_000 },
+    },
   },
   xai: {
     label: 'xAI / Grok',
@@ -264,10 +291,15 @@ export class OpenAICompatibleModel extends AiSdkModel {
     return process.env.ORCHESTATI_BASE_URL?.trim() || this.preset.baseURL;
   }
 
-  describeTier(tier: LlmTier): { model: string; price?: { in: number; out: number; known: boolean } } {
+  describeTier(tier: LlmTier): {
+    model: string;
+    price?: { in: number; out: number; known: boolean };
+    limits?: ModelLimits;
+  } {
     const id = modelForTierIn(this.preset, tier, this.overrides);
     const price = priceOf(`${this.name}:${id}`);
-    return { model: `${this.name}:${id}`, ...(price ? { price } : {}) };
+    const limits = this.preset.limits?.[id];
+    return { model: `${this.name}:${id}`, ...(price ? { price } : {}), ...(limits ? { limits } : {}) };
   }
 
   async init(): Promise<this> {
@@ -394,4 +426,13 @@ export function pricedModels(): PricedModel[] {
     }
   }
   return out;
+}
+
+/** Limites conocidos de un `proveedor:modelo`. */
+export function limitsOf(spec: string, fallbackPreset?: PresetName): ModelLimits | undefined {
+  const { preset, model } = parseTierSpec(spec);
+  const nombre = preset ?? fallbackPreset;
+  if (!nombre) return undefined;
+  const p: EndpointPreset = PRESETS[nombre];
+  return p.limits?.[model];
 }

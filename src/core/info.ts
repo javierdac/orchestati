@@ -15,6 +15,8 @@ export interface TierInfo {
   model?: string;
   /** USD por millon de tokens, si se conoce. */
   price?: { in: number; out: number; known: boolean };
+  /** Limites de uso del proveedor, si se conocen. */
+  limits?: { rpm?: number; tpm?: number; rpd?: number; tpd?: number };
   agents: string[];
 }
 
@@ -77,7 +79,8 @@ export function formatSystemInfo(info: SystemInfo, opts: { markdown?: boolean } 
     const precio = t.price
       ? ` · ${usd(t.price.in)}/${usd(t.price.out)} por millón de tokens${t.price.known ? '' : ' (estimado)'}`
       : '';
-    out.push(`- ${b(t.tier)}: ${modelo}${precio}`);
+    const lim = t.limits?.tpm ? ` · límite ${t.limits.tpm.toLocaleString()} tok/min` : '';
+    out.push(`- ${b(t.tier)}: ${modelo}${precio}${lim}`);
     if (t.agents.length) out.push(`  agentes: ${t.agents.join(', ')}`);
   }
 

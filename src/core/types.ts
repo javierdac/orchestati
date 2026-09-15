@@ -280,7 +280,13 @@ export interface ModelClient {
    * Que modelo y a que precio atiende un escalon. Opcional: un cliente puede
    * no saberlo. Sirve para que el sistema pueda describirse a si mismo.
    */
-  describeTier?(tier: Exclude<Tier, 'reflex'>): { model: string; price?: { in: number; out: number; known: boolean } } | undefined;
+  describeTier?(tier: Exclude<Tier, 'reflex'>):
+    | {
+        model: string;
+        price?: { in: number; out: number; known: boolean };
+        limits?: { rpm?: number; tpm?: number; rpd?: number; tpd?: number };
+      }
+    | undefined;
 }
 
 /** Lo que el modelo necesita saber de una herramienta para poder pedirla. */

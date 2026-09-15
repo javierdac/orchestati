@@ -26,6 +26,7 @@ import {
   isPresetName,
   presetUsable,
   parseTierSpec,
+  limitsOf,
   type PresetName,
 } from '../llm/openai-compatible.js';
 import type { EndpointPreset } from '../llm/openai-compatible.js';
@@ -314,6 +315,29 @@ async function barrer(spec: string | undefined): Promise<void> {
     log(`\n    ${C.bold(p.etiqueta.padEnd(28))} $${total.toFixed(5)}  ${etiqueta}`);
     log(C.dim(`      ${nombre(p.config)}`));
     if (inciertos.size) log(C.yellow(`      ⚠ precio estimado para: ${[...inciertos].join(', ')}`));
+
+    // Los limites de rate son parte del costo real: una opcion mas barata que
+    // no aguanta tu concurrencia no es mas barata, es inviable.
+    for (const tier of TIERS) {
+      const spec = p.config[tier];
+      if (!spec) continue;
+      const lim = limitsOf(spec, base);
+      if (!lim?.tpm) continue;
+
+      // Tokens que ese escalon consumio en el perfil, por pedido.
+      const pedidosDelTier = perfil.pedidos.filter((x) => x.porTier[tier]);
+      if (pedidosDelTier.length === 0) continue;
+      const porPedido =
+        pedidosDelTier.reduce((a, x) => a + x.porTier[tier]!.inputTokens + x.porTier[tier]!.outputTokens, 0) /
+        pedidosDelTier.length;
+      const pedidosPorMinuto = Math.floor(lim.tpm / Math.max(1, porPedido));
+
+      log(
+        C.yellow(
+          `      ⚠ ${spec}: ${lim.tpm.toLocaleString()} tok/min ≈ ${pedidosPorMinuto} pedido(s) de ${tier} por minuto`,
+        ),
+      );
+    }
   }
 
   const sinCredencial = [...new Set(candidatos.filter((c) => !c.local && !disponible(c.spec)).map((c) => parseTierSpec(c.spec).preset))];

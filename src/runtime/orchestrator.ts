@@ -227,6 +227,7 @@ export class Orchestrator {
         agents: delTier,
         ...(resuelto?.model ? { model: resuelto.model } : {}),
         ...(resuelto?.price ? { price: resuelto.price } : {}),
+        ...(resuelto?.limits ? { limits: resuelto.limits } : {}),
       };
     });
 
