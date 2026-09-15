@@ -1,431 +1,316 @@
 # Orchestati
 
-Orquestador dinámico de agentes en TypeScript. **Analiza el pedido localmente
-—sin gastar un solo token— y recién ahí decide qué agente (o combinación de
-agentes) lo atiende.**
+**A dynamic agent orchestrator in TypeScript. It analyzes every request locally — spending zero tokens — and only then decides which agent, or combination of agents, should handle it.**
 
-Si le decís `hola`, responde en 5 ms y cuesta $0.
-Si le pedís que investigue, planifique y estime costos, abre tres agentes en
-paralelo y sintetiza.
+Say `hi` and it answers in 5 ms for $0, never touching a model. Ask it to research, plan and estimate costs, and it fans out to three agents in parallel and synthesizes the result.
 
-```
-$ pnpm dev --trace "hola"
+*[Versión en español](README.es.md)*
+
+```console
+$ pnpm dev --trace "hi"
 [reflex] direct · reflex.smalltalk
 
-¡Hola! ¿En qué te doy una mano?
+Hey! What can I help you with?
 
-    4ms analyze      intent=greeting complejidad=0.01
+    4ms analyze      intent=greeting complexity=0.01
     5ms route        direct -> reflex.smalltalk
-    5ms done         1 agente(s), $0.00000
+    5ms done         1 agent, $0.00000
 ```
 
-## La idea
+---
 
-La mayoría de los sistemas de agentes mandan *todo* al modelo más grande. Acá el
-camino se elige antes, con un analizador determinista que corre en microsegundos:
+## The idea
+
+Most agent systems send *everything* to the biggest model. Orchestati picks the path first, using a deterministic analyzer that runs in microseconds:
 
 ```
-input ──► Analyzer ──► Router ──► Executor ──► respuesta
-          (local)      (local)     (agentes)
+input ──► Analyzer ──► Router ──► Executor ──► response
+          (local)      (local)     (agents)
           0 tokens     0 tokens
 ```
 
-## Ruteo real
+The routing decision costs nothing, so the system can afford to make it carefully — and the money is only spent where it actually buys something.
 
-Salida de `pnpm table`, el banco de calibración del repo:
+## Routing in practice
 
-| Pedido | Intent | Cpx | Tier | Estrategia | Agentes |
+Real output from `pnpm table`, the repository's calibration bench. The lexicon is bilingual (English/Spanish); these are the English prompts, and the Spanish equivalents route identically.
+
+| Request | Intent | Cpx | Tier | Strategy | Agents |
 |---|---|---|---|---|---|
-| `hola` | greeting | 0.01 | reflex | direct | `reflex.smalltalk` |
-| `quien sos y que podes hacer` | identity | 0.07 | reflex | direct | `reflex.identity` |
-| `que es un closure en javascript` | factual_qa | 0.21 | light | direct | `llm.quick` |
-| `cuanto es el 15% de 2340` | math | 0.29 | standard | direct | `llm.analyst` |
-| `escribime una funcion que valide un email` | code_generate | 0.38 | standard | direct | `llm.coder` |
-| `borra todos los registros de users en produccion` | tool_action | 0.36 | standard | direct | `llm.tools` |
-| `TypeError: cannot read property map of undefined…` | code_debug | 0.51 | deep | chain | `llm.debugger → llm.critic` |
-| `diseñame la arquitectura de un sistema multi-tenant` | planning | 0.54 | deep | chain | `llm.planner → llm.researcher → llm.critic` |
-| `investiga y compara…, despues un plan y ademas costos` | research | 0.74 | swarm | parallel | `llm.researcher ∥ llm.planner ∥ llm.analyst → llm.synthesizer` |
+| `hi` | greeting | 0.01 | reflex | direct | `reflex.smalltalk` |
+| `who are you and what can you do` | identity | 0.08 | reflex | direct | `reflex.identity` |
+| `what is a closure in javascript` | factual_qa | 0.21 | light | direct | `llm.quick` |
+| `summarize this paragraph in two lines` | summarize | 0.26 | standard | direct | `llm.writer` |
+| `how much is 15% of 2340` | math | 0.32 | standard | direct | `llm.analyst` |
+| `delete every row in the users table in production` | tool_action | 0.36 | standard | direct | `llm.tools` |
+| `write a typescript function that validates an email` | code_generate | 0.38 | standard | direct | `llm.coder` |
+| `refactor this payments module, it became a mess` | refactor | 0.44 | standard | direct | `llm.coder` |
+| `my app throws TypeError: cannot read property map of undefined` | code_debug | 0.51 | deep | chain | `llm.debugger → llm.critic` |
+| `design the full architecture of a multi-tenant billing system` | planning | 0.54 | deep | chain | `llm.planner → llm.researcher → llm.critic` |
+| `research and compare vector DBs, then a migration plan and cost estimates` | research | 0.60 | swarm | parallel | `researcher ∥ planner ∥ analyst → synthesizer` |
 
-## Las cuatro piezas
+---
 
-### 1. Analyzer — `src/analysis/`
+## Quick start
 
-Determinista, sincrónico, sin red. Extrae de cada pedido:
-
-- **intención** (20 tipos, léxico bilingüe es/en) con la evidencia que la disparó;
-- **artefactos**: bloques de código, stack traces, URLs, rutas de archivo, JSON;
-- **estructura**: palabras, preguntas, ítems de lista, **pedidos encadenados**;
-- **riesgo** (0–1): verbos irreversibles como `borrar`, `deploy a prod`, `cobrar`;
-- **complejidad** (0–1), con su desglose para poder auditarla.
-
-El modelo de complejidad trata la dificultad intrínseca de la tarea como un
-**piso**, no como un sumando: *"diseñame la arquitectura de X"* es un pedido
-pesado aunque se diga en doce palabras. El resto de los rasgos amplifican.
-
-```ts
-import { analyze } from 'orchestati';
-
-analyze('hola').complexity;                    // 0.01 → reflex
-analyze('diseñame la arquitectura…').complexity; // 0.54 → deep
+```bash
+pnpm install
+pnpm chat        # interactive chat with live routing, tokens and cost
 ```
 
-Un saludo pegado a un pedido real no secuestra el ruteo: las intenciones
-conversacionales escalan su score por la fracción del mensaje que ocupan, así que
-`"hola, refactorizame esto"` rutea a `refactor`, no a `greeting`.
+With no credentials the system runs on `MockModel`: **the routing is real, the answers are not.** That is enough to develop and test the entire orchestrator without spending anything.
 
-### 2. Clasificador semántico — `src/analysis/semantic/`
+To hit real models, copy `.env.example` to `.env` and set one key. Entry points load it automatically, so you never have to remember your shell's export syntax.
 
-El léxico de regex tiene una debilidad estructural: **alguien tiene que
-mantenerlo**, y cuando no matchea no hay red. Medido sobre un set held-out de 62
-frases que no están en ningún lado del código, el léxico solo acierta el
-**35.5%** — el resto cae en `unknown`.
-
-La red es un clasificador local: n-gramas de caracteres (3–5) hasheados con pesos
-TF-IDF, comparados por coseno contra 223 frases prototipo etiquetadas. **Sin
-dependencias, sin descargas, sin tokens.** Los n-gramas de caracteres son los que
-hacen el trabajo: "refactorizame", "refactorizar" y "refactor" comparten casi
-todos sus trigramas, así que caen juntos sin que nadie escriba la regla — y de
-paso absorben los errores de tipeo, que es justo donde el léxico se rompe.
-
-```
-$ pnpm eval            $ pnpm eval b
-set A · 62 casos       set B · 39 casos (control)
-
-  solo lexico   35.5%    solo lexico   23.1%
-  + semantico   82.3%    + semantico   79.5%
-```
-
-**Dos sets, y el segundo es el que importa.** Medir muchas veces contra el mismo
-set held-out lo va gastando: cada ajuste que uno hace mirando sus errores lo
-convierte de a poco en un set de entrenamiento. El set B se escribió *antes* de
-ampliar los prototipos y sin mirar los fallos del A. Cuando amplié la cobertura,
-el A subió 8 puntos y **el B, que nunca miré, subió 18** — así que la ganancia
-generaliza en vez de sobreajustar. Un test verifica además que ninguna frase de
-evaluación aparezca textual entre los prototipos.
-
-**Dos umbrales, porque son dos decisiones distintas.** Midiendo la calibración del
-score: con similitud ≥ 0.30 el clasificador acierta el **100%** de las veces, con
-≥ 0.22 el 81%, y sin piso el 63%. Entonces:
-
-- **Rellenar** un `unknown` (piso 0.15) — un 63% de acierto le gana a un `unknown`,
-  que no aporta *ninguna* información de ruteo.
-- **Dar vuelta** una respuesta del léxico (piso 0.30) — para eso hace falta el
-  tramo donde el semántico no se equivoca.
-
-El léxico sigue mandando cuando está seguro: es exacto, auditable y gratis. El
-semántico se consulta **solo si el léxico dudó**, así que la vía rápida no paga
-nada — 27 µs contra 513 µs del caso dudoso.
-
-Cada predicción viene con el prototipo más parecido como evidencia
-(`≈ "armemos el roadmap del trimestre" (0.41)`), así que siempre se puede auditar
-por qué dijo lo que dijo.
-
-#### La incertidumbre se propaga
-
-Esto fue lo que más cambió el diseño. Un clasificador que acierta 74% **falla 26%**,
-y el sistema tiene que saberlo. La confianza ahora viaja hasta el final:
-
-- **La complejidad de una intención adivinada regresa hacia la media.** Si el
-  clasificador dice "farewell" para un pedido de refactor, creerle su 0.00 de
-  complejidad manda el pedido al agente reflex.
-- **El router deja de rankear por intención cuando no está seguro.** El peso de
-  `intent` se recorta por la confianza y pasa a la cobertura de capacidades, que
-  se infiere también de evidencia dura (bloques de código, stack traces, rutas) y
-  no solo del fraseo. Ante la duda, un agente con las capacidades correctas le
-  gana a un especialista de una intención que quizá adivinamos mal.
-- **Una intención adivinada no puede activar el camino reflex.** Es el único
-  camino sin recuperación posible —responde una frase fija y listo—, así que
-  exige confianza ≥ 0.6. Un saludo de verdad la tiene: `hola` da 1.00.
-
-Sin esto, `"separá la logica de negocio de la vista"` se clasificaba como
-`farewell` y el sistema contestaba **"¡Chau! Cuando quieras seguimos."** Ahora va
-a un agente que puede responder.
-
-### 3. Router — `src/router/`
-
-Puntúa **todos** los agentes del pool contra las señales y elige. El score se
-compone de cinco términos, todos visibles en `decision.ranking`:
-
-| Término | Peso | Qué mide |
+| Backend | Variable | Notes |
 |---|---|---|
-| `capability` | 0.30 | cobertura de las capacidades que el pedido requiere |
-| `intent` | 0.26 | si el agente declara esa intención — **escalado por la confianza** |
-| `tierFit` | 0.24 | distancia al escalón de potencia objetivo (penaliza quedarse corto **y** pasarse) |
-| `prior` | 0.12 | cómo le fue históricamente a ese agente con esa intención |
-| `cost` | 0.08 | penalización por costo relativo |
+| OpenAI | `OPENAI_API_KEY` | defaults to the `gpt-4.1` family |
+| **Gemini** | `GEMINI_API_KEY` | has a free tier; used through its OpenAI-compatible endpoint |
+| **Groq** | `GROQ_API_KEY` | free tier, runs open-weight models |
+| OpenRouter | `OPENROUTER_API_KEY` | |
+| Vercel AI Gateway | `AI_GATEWAY_API_KEY` | one key for every provider |
+| Ollama / LM Studio | — | local; **must be requested** with `ORCHESTATI_PROVIDER=ollama` |
 
-Además cada agente puede **auto-vetarse** con `accepts()`. Así el agente reflex se
-excluye solo en cuanto aparece un pedido real, en vez de depender de un `if` en
-el router.
+Everything except the gateway goes through a single OpenAI-compatible client, so adding a new destination means adding a preset, not a provider.
 
-Luego elige la forma de ejecución:
+Local backends are **deliberately not auto-detected**: a server listening on a port is not the same as a server you meant to use.
 
-- **`direct`** — un agente.
-- **`chain`** — planner → worker → crítico, y *cada eslabón entra solo si aporta*
-  (planificar un stack trace no sirve de nada: eso se diagnostica).
-- **`parallel`** — fan-out + sintetizador. `swarm` no se alcanza por umbral
-  escalar sino por regla explícita: el pedido tiene que ser **pesado Y múltiple**.
-  Un solo pedido, por difícil que sea, no gana nada con fan-out.
+---
 
-En el fan-out cada agente tiene que aportar al menos una capacidad *requerida por
-el pedido* que no esté cubierta — sin esa condición el paralelo se llena de
-agentes irrelevantes.
+## The chat example
 
-### 4. Agentes — `src/agents/`
-
-Un agente declara qué sabe hacer, cuánto cuesta y **hasta qué complejidad se
-anima** (`comfortMax`). Si el pedido lo supera, devuelve `escalate` en vez de
-entregar una respuesta pobre, y el orquestador lo vuelve a rutear más arriba.
-
-| Agente | Tier | Rol | Para qué |
-|---|---|---|---|
-| `reflex.smalltalk` | reflex | responder | saludos, gracias, despedidas — **sin LLM** |
-| `reflex.identity` | reflex | responder | "¿quién sos?" — describe el pool real |
-| `llm.quick` | light | responder | preguntas directas, traducciones cortas |
-| `llm.writer` | standard | worker | redacción, resúmenes, explicaciones |
-| `llm.coder` | standard | worker | código — lee y escribe archivos |
-| `llm.analyst` | standard | worker | cálculos y costos — usa `calculator` |
-| `llm.tools` | standard | worker | acciones con efecto — ejecuta comandos |
-| `llm.debugger` | deep | worker | stack traces y causa raíz — lee el código real |
-| `llm.researcher` | deep | worker | comparaciones y trade-offs |
-| `llm.planner` | deep | planner | descompone en pasos accionables |
-| `llm.critic` | standard | critic | revisa el trabajo previo |
-| `llm.synthesizer` | standard | synthesizer | fusiona salidas paralelas |
-
-### 5. Herramientas — `src/tools/`
-
-Los agentes ejecutan de verdad. Cada herramienta declara su **nivel de riesgo**, y
-ese nivel define qué hace falta para correrla:
-
-| Herramienta | Riesgo | Qué hace |
-|---|---|---|
-| `read_file` · `list_dir` · `search_code` | `safe` | leen el proyecto — se ejecutan sin preguntar |
-| `calculator` | `safe` | aritmética exacta, **sin `eval`** |
-| `write_file` · `http_fetch` | `confirm` | escriben o salen a la red |
-| `run_command` | `destructive` | ejecuta un binario del proyecto |
-
-**El loop de herramientas lo corre Orchestati, no el SDK del proveedor.** Esa es la
-decisión de diseño que sostiene todo lo demás: entre que el modelo pide una
-herramienta y esa herramienta se ejecuta tiene que pasar un gate de confirmación.
-Si el loop vive adentro del SDK, ese gate no existe.
+`pnpm chat` shows what a normal chat hides — where each request was routed, which agent handled it, which tools ran, how many tokens it cost, and **how much the session has spent so far**.
 
 ```
-modelo pide  ─►  ¿existe?  ─►  ¿argumentos válidos?  ─►  ¿autorizado?  ─►  ejecuta
-                     │                  │                      │
-                     └──────────────────┴──────────────────────┘
-                         al modelo se le explica qué pasó y sigue
+  backend   OpenAI
+  light     gpt-4.1-nano
+  standard  gpt-4.1-mini
+  deep      gpt-4.1
+  reflex    — no model, immediate response
+
+  /examples  list the paths   ·  /1 .. /11  run one
+  /cost      running total    ·  /trace  detail  ·  /exit
 ```
 
-Una denegación **no es un error**: al modelo se le devuelve *"hace falta el permiso
-del usuario"* y sigue trabajando sin esa herramienta.
-
-**Políticas de confirmación** (`src/tools/confirm.ts`):
-
-- `autoSafe()` — **el default**: lee sin preguntar, no escribe nada sin permiso.
-- `askUser(fn)` — lo `safe` pasa directo, el resto va a quien decida.
-- `denyAll()` — rechaza todo: sirve para ver qué *haría* un agente (`--dry-run`).
-- `allowAll()` — sin preguntar, sólo para entornos donde la autorización ya se dio
-  afuera (`--yes`). Nunca es el default.
-
-```console
-$ pnpm dev "corre los tests del proyecto con pnpm test"
-  ⊘ run_command (no autorizada)
-  No se ejecutó "ejecutar: pnpm test": la política activa solo permite lectura.
-
-$ pnpm dev --yes "corre los tests del proyecto con pnpm test"
-  ✓ run_command
-  RUN v2.1.9 — 59 tests passed
-```
-
-**Contención:** las herramientas de archivos no salen de la raíz del proyecto
-(`..`, rutas absolutas y bytes nulos se rechazan); `run_command` usa una **lista de
-permitidos** —no de prohibidos— y rechaza metacaracteres de shell que permitirían
-encadenar comandos; `http_fetch` bloquea la red local, incluido el endpoint de
-metadata de cloud; y `calculator` parsea la expresión en vez de evaluarla, así que
-una "cuenta" no puede ejecutar código.
-
-### 6. Executor — `src/runtime/`
-
-Ejecuta la estrategia con presupuesto (`maxCostUsd`, `maxMs`), bucle de escalado,
-tolerancia a fallos —si un agente del paralelo explota, la corrida sigue— y una
-**traza completa** de qué se decidió y por qué.
-
-Después de cada corrida el router recibe feedback y actualiza su memoria
-(EWMA por par intención↔agente, persistida en `.orchestati/memory.json`), así que
-el ruteo mejora con el uso.
-
-### 7. El chat de ejemplo — `pnpm chat`
-
-Un chat que muestra lo que un chat normal esconde: por dónde ruteó cada pedido,
-qué agente lo atendió, qué herramientas usó, cuántos tokens costó y **cuánto
-lleva gastado la sesión**.
-
-`/ejemplos` lista un pedido por camino (podés correrlos con `/1` … `/11`) y
-`/costo` imprime el acumulado. Una sesión real contra `gpt-4.1`:
+Type `/examples` for one request per routing path, then `/cost` for the breakdown. A real session against `gpt-4.1`:
 
 ```
-  Consumo de la sesion
-  3 mensaje(s) · 759 entrada + 86 salida = 845 tokens · $0.00036
+  Session usage
+  3 messages · 759 in + 86 out = 845 tokens · $0.00036
 
-  por escalon
+  by tier
     reflex     1 msg       0 tok         $0   0%
     light      1 msg     183 tok   $0.00003   8%
     standard   1 msg     662 tok   $0.00033  92%
 
-  por agente
+  by agent
     llm.analyst         1×     662 tok   $0.00033
     llm.quick           1×     183 tok   $0.00003
     reflex.smalltalk    1×       0 tok         $0
 
-  herramientas  calculator×1
+  tools  calculator×1
 
-  2 de 3 pedido(s) no necesitaron el escalon caro
-  1 se resolvio sin llamar a ningun modelo
+  2 of 3 requests did not need the expensive tier
+  1 was answered without calling any model
 ```
 
-Ese desglose es la tesis del proyecto medida en plata: el saludo salió gratis, la
-pregunta simple costó tres centésimas de milésimo, y el 92% del gasto se lo llevó
-el único pedido que realmente lo necesitaba.
+That breakdown is the project's thesis measured in money: the greeting was free, the simple question cost three hundred-thousandths of a dollar, and 92% of the spend went to the single request that actually warranted it.
 
-### 8. Streaming, sesiones y servidor
+---
 
-**El streaming acá no es sólo texto token a token.** Una UI necesita saber *qué
-agente* está trabajando, qué herramienta corrió y cuándo el sistema decidió
-escalar — la traza es parte del producto, no un log. Por eso `stream()` emite
-eventos tipados:
+## How it works
+
+### 1. Analyzer — `src/analysis/`
+
+Deterministic, synchronous, no network. From every request it extracts:
+
+- **intent** — 20 types, bilingual lexicon, with the evidence that triggered it;
+- **artifacts** — code blocks, stack traces, URLs, file paths, JSON;
+- **structure** — words, questions, list items, **chained requests**;
+- **risk** (0–1) — irreversible verbs like *delete*, *deploy to prod*, *charge*;
+- **complexity** (0–1), with a breakdown you can audit.
+
+The complexity model treats a task's intrinsic difficulty as a **floor**, not as one term among many: *"design the architecture of X"* is a heavy request even when it is said in twelve words. Everything else amplifies from there.
 
 ```ts
-for await (const ev of orchestrator.stream('refactorizame esto')) {
-  if (ev.type === 'route')       mostrarPipeline(ev.decision);
-  if (ev.type === 'tool')        mostrarHerramienta(ev.record);
-  if (ev.type === 'text')        escribir(ev.delta);   // ev.agentId dice de quién
-  if (ev.type === 'escalate')    avisar(ev.from, ev.to);
-  if (ev.type === 'done')        cerrar(ev.result);
+import { analyze } from 'orchestati';
+
+analyze('hi').complexity;                      // 0.01 → reflex
+analyze('design the architecture…').complexity; // 0.54 → deep
+```
+
+A greeting glued to a real request does not hijack the routing: conversational intents scale their score by the fraction of the message they occupy, so `"hi, refactor this for me"` routes to `refactor`, not `greeting`.
+
+### 2. Semantic classifier — `src/analysis/semantic/`
+
+A regex lexicon has a structural weakness: **somebody has to maintain it**, and when it does not match there is no safety net. Measured on a held-out set of 62 phrases that appear nowhere in the codebase, the lexicon alone is right **35.5%** of the time — the rest falls through to `unknown`.
+
+The net is a local classifier: character n-grams (3–5) hashed with TF-IDF weights, compared by cosine against 223 labeled prototype phrases. **No dependencies, no downloads, no tokens.** Character n-grams do the heavy lifting: *refactorizame*, *refactorizar* and *refactor* share nearly all their trigrams, so they land together without anyone writing the rule — and they absorb typos, which is exactly where a lexicon breaks.
+
+```console
+$ pnpm eval              $ pnpm eval b
+set A · 62 cases         set B · 39 cases (control)
+
+  lexicon only   35.5%     lexicon only   23.1%
+  + semantic     82.3%     + semantic     79.5%
+```
+
+**Two thresholds, because they are two different decisions.** Measuring the score's calibration: at similarity ≥ 0.30 the classifier is right **100%** of the time, at ≥ 0.22 it is right 81%, and with no floor at all, 63%. So:
+
+- **Filling in** an `unknown` (floor 0.15) — being right 63% of the time beats `unknown`, which carries *no* routing information at all.
+- **Overruling** the lexicon (floor 0.30) — that requires the band where the classifier does not get it wrong.
+
+The lexicon still wins when it is confident: it is exact, auditable and free. The semantic classifier is consulted **only when the lexicon hesitated**, so the fast path pays nothing — 27 µs versus 513 µs for the doubtful case.
+
+Every prediction carries its nearest prototype as evidence (`≈ "let's draw up the quarterly roadmap" (0.41)`), so you can always audit why it said what it said.
+
+**Two evaluation sets, and the second is the one that matters.** Measuring repeatedly against the same held-out set wears it out: every adjustment you make while looking at its errors turns it, bit by bit, into a training set. Set B was written *before* the prototypes were expanded and without looking at set A's failures. When coverage was expanded, A gained 8 points and **B, never inspected, gained 18** — so the improvement generalizes rather than overfitting. A test also asserts that no evaluation phrase appears verbatim among the prototypes.
+
+#### Uncertainty propagates
+
+This is what changed the design most. A classifier that is right 74% of the time **is wrong 26% of the time**, and the system has to know it. Confidence now travels all the way down:
+
+- **A guessed intent's complexity regresses toward the mean.** If the classifier says *farewell* for a refactor request, believing its 0.00 complexity sends the request to the reflex agent.
+- **The router stops ranking by intent when it is unsure.** The `intent` weight is scaled by confidence and the remainder is handed to capability coverage — which is also inferred from hard evidence (code blocks, stack traces, paths), not just phrasing. When in doubt, an agent with the right capabilities beats a specialist for an intent you may have guessed wrong.
+- **A guessed intent cannot trigger the reflex path.** It is the only path with no recovery — it answers with a fixed string and it is done — so it requires confidence ≥ 0.6. A real greeting has it: `hi` scores 1.00.
+
+Without this, `"separate the business logic from the view"` was classified as `farewell` and the system answered **"Bye! Ping me anytime."** Now it goes to an agent that can actually respond.
+
+### 3. Router — `src/router/`
+
+Scores **every** agent in the pool against the signals and picks. The score has five terms, all visible in `decision.ranking`:
+
+| Term | Weight | What it measures |
+|---|---|---|
+| `capability` | 0.30 | coverage of the capabilities the request requires |
+| `intent` | 0.26 | whether the agent declares that intent — **scaled by confidence** |
+| `tierFit` | 0.24 | distance to the target power tier (penalizes undershooting **and** overshooting) |
+| `prior` | 0.12 | how that agent has historically performed on that intent |
+| `cost` | 0.08 | relative cost penalty |
+
+Agents can also **veto themselves** through `accepts()`. That is how the reflex agent excludes itself the moment a real request shows up, instead of depending on an `if` inside the router.
+
+Then it picks an execution shape:
+
+- **`direct`** — one agent.
+- **`chain`** — planner → worker → critic, where *each link is included only if it contributes* (planning a stack trace buys nothing; that is a diagnosis, not a plan).
+- **`parallel`** — fan-out plus a synthesizer. `swarm` is not reached by a scalar threshold but by an explicit rule: the request has to be **heavy AND multi-part**. A single request, however hard, gains nothing from fanning out.
+
+In a fan-out, every agent must contribute at least one capability *the request actually requires* that is not yet covered — without that condition the parallel branch fills up with irrelevant agents.
+
+### 4. Agents — `src/agents/`
+
+An agent declares what it can do, what it costs, and **how hard a request it is willing to take on** (`comfortMax`). When a request exceeds that, it returns `escalate` instead of delivering a poor answer, and the orchestrator re-routes it upward.
+
+| Agent | Tier | Role | Purpose |
+|---|---|---|---|
+| `reflex.smalltalk` | reflex | responder | greetings, thanks, goodbyes — **no LLM** |
+| `reflex.identity` | reflex | responder | "who are you?" — describes the real pool |
+| `llm.quick` | light | responder | direct questions, short translations |
+| `llm.writer` | standard | worker | prose, summaries, explanations |
+| `llm.coder` | standard | worker | code — reads and writes files |
+| `llm.analyst` | standard | worker | arithmetic and costs — uses `calculator` |
+| `llm.tools` | standard | worker | actions with side effects — runs commands |
+| `llm.debugger` | deep | worker | stack traces and root cause — reads the real code |
+| `llm.researcher` | deep | worker | comparisons and trade-offs |
+| `llm.planner` | deep | planner | breaks work into actionable steps |
+| `llm.critic` | standard | critic | reviews the previous work |
+| `llm.synthesizer` | standard | synthesizer | merges parallel outputs |
+
+### 5. Tools — `src/tools/`
+
+Agents actually execute. Every tool declares a **risk level**, and that level defines what it takes to run it:
+
+| Tool | Risk | What it does |
+|---|---|---|
+| `read_file` · `list_dir` · `search_code` | `safe` | read the project — run without asking |
+| `calculator` | `safe` | exact arithmetic, **without `eval`** |
+| `write_file` · `http_fetch` | `confirm` | write to disk or reach the network |
+| `run_command` | `destructive` | execute a project binary |
+
+**Orchestati runs the tool loop, not the provider's SDK.** That is the design decision holding everything else up: between the model asking for a tool and that tool running, a confirmation gate has to happen. If the loop lives inside the SDK, that gate does not exist.
+
+```
+model asks ─► exists? ─► valid args? ─► authorized? ─► execute
+                 │            │              │
+                 └────────────┴──────────────┘
+                 the model is told what happened and continues
+```
+
+A denial **is not an error**: the model is handed *"this needs the user's permission"* and keeps working without that tool.
+
+**Confirmation policies** (`src/tools/confirm.ts`):
+
+- `autoSafe()` — **the default**: reads without asking, writes nothing without permission.
+- `askUser(fn)` — `safe` passes through, everything else goes to whoever decides.
+- `denyAll()` — rejects everything, to see what an agent *would* do (`--dry-run`).
+- `allowAll()` — no prompting, only for environments where authorization already happened elsewhere (`--yes`). Never the default.
+
+```console
+$ pnpm dev "run the project tests with pnpm test"
+  ⊘ run_command (not authorized)
+  Did not run "execute: pnpm test": the active policy only allows reads.
+
+$ pnpm dev --yes "run the project tests with pnpm test"
+  ✓ run_command
+  RUN v2.1.9 — 131 tests passed
+```
+
+**Containment:** file tools cannot leave the project root (`..`, absolute paths and null bytes are rejected); `run_command` uses an **allowlist** — not a denylist — and rejects shell metacharacters that would let commands be chained; `http_fetch` blocks local network destinations, including the cloud metadata endpoint; and `calculator` parses the expression instead of evaluating it, so a "sum" cannot execute code.
+
+### 6. Executor — `src/runtime/`
+
+Runs the strategy with a budget (`maxCostUsd`, `maxMs`), an escalation loop, fault tolerance — if one agent in a parallel branch blows up, the run continues — and a **complete trace** of what was decided and why.
+
+After every run the router receives feedback and updates its memory (an EWMA per intent↔agent pair, persisted to `.orchestati/memory.json`), so routing improves with use.
+
+### 7. Streaming, sessions and server
+
+**Streaming here is not just text token by token.** A UI needs to know *which agent* is working, which tool ran, and when the system decided to escalate — the trace is part of the product, not a log. So `stream()` emits typed events:
+
+```ts
+for await (const ev of orchestrator.stream('refactor this')) {
+  if (ev.type === 'route')    showPipeline(ev.decision);
+  if (ev.type === 'tool')     showTool(ev.record);
+  if (ev.type === 'text')     write(ev.delta);   // ev.agentId says whose
+  if (ev.type === 'escalate') notify(ev.from, ev.to);
+  if (ev.type === 'done')     finish(ev.result);
 }
 ```
 
-En `parallel` hay tres agentes escribiendo a la vez: por eso cada evento de texto
-lleva su `agentId`, y el consumidor decide cuál renderizar (la CLI muestra sólo
-el que produce la respuesta final).
+In `parallel` three agents write at once, which is why every text event carries its `agentId` and the consumer decides which one to render.
 
-**Sesiones** — `InMemorySessionStore` o `FileSessionStore` (JSONL append-only, un
-archivo por sesión, así dos procesos no se pisan). El historial se recorta por
-los últimos N turnos.
+**Sessions** — `InMemorySessionStore` or `FileSessionStore` (append-only JSONL, one file per session, so two processes cannot clobber each other).
 
 ```ts
-await o.run('escribime un parser de CSV', { sessionId: 'javier' });
-await o.run('ahora pasalo a python',      { sessionId: 'javier' });  // tiene contexto
+await o.run('write me a CSV parser',  { sessionId: 'javier' });
+await o.run('now port it to python',  { sessionId: 'javier' });  // has context
 ```
 
-**Servidor HTTP** — `node:http`, sin framework:
+**HTTP server** — `node:http`, no framework:
 
 ```bash
 pnpm serve      # http://127.0.0.1:3000
 ```
 
-| Endpoint | Qué hace |
+| Endpoint | Purpose |
 |---|---|
-| `POST /chat` | ejecuta y devuelve el resultado completo |
-| `POST /chat/stream` | lo mismo, como SSE evento por evento |
-| `POST /inspect` | análisis + decisión de ruteo, **sin ejecutar** |
-| `GET /agents` | el pool con tiers, capacidades y costos |
-| `GET` · `DELETE /session/:id` | historial de una sesión |
-| `GET /` | UI de demostración: pipeline, herramientas y traza en vivo |
+| `POST /chat` | run and return the full result |
+| `POST /chat/stream` | the same, as SSE, event by event |
+| `POST /inspect` | analysis and routing decision, **without executing** |
+| `GET /agents` | the pool with tiers, capabilities and costs |
+| `GET` · `DELETE /session/:id` | a session's history |
+| `GET /` | demo UI: pipeline, tools and trace, live |
 
-Del otro lado de un HTTP **no hay a quién preguntarle** si autoriza un `rm`. Por
-eso la política por defecto del servidor es `autoSafe` —lectura sí, escritura
-no— y subirla es una decisión explícita de quien lo levanta.
+Behind an HTTP boundary there is **nobody to ask** whether an `rm` is authorized. That is why the server's default policy is `autoSafe` — reads yes, writes no — and raising it is an explicit decision by whoever starts it.
 
-## Uso
+---
 
-```bash
-pnpm install
+## Extending it
 
-pnpm dev "hola"                       # ejecuta
-pnpm dev --explain "<pedido>"         # muestra análisis + decisión, sin ejecutar
-pnpm dev --trace "<pedido>"           # ejecuta e imprime la traza
-pnpm dev --json "<pedido>"            # salida estructurada
-pnpm dev --dry-run "<pedido>"         # deniega toda herramienta: qué *haría*
-pnpm dev --yes "<pedido>"             # autoriza herramientas sin preguntar
-pnpm dev --no-session "<pedido>"      # sin historial de conversación
-pnpm dev                              # modo interactivo (pregunta cada acción)
-pnpm serve                            # servidor HTTP + SSE + UI de demo
-pnpm table                            # banco de calibración del ruteo
-pnpm chat                             # chat de ejemplo: ruteo, tokens y costo en vivo
-pnpm eval                             # accuracy del clasificador (set A)
-pnpm eval b                           # ídem sobre el set de control
-pnpm test
-```
+### Add an agent
 
-Sin credenciales el sistema usa `MockModel`: **el ruteo es real, las respuestas
-no**. Sirve para desarrollar y testear el orquestador entero sin gastar un peso.
-
-Para pegarle a modelos de verdad, copiá `.env.example` a `.env` y poné una key.
-Los puntos de entrada lo cargan solos, así que no hace falta exportar nada ni
-acordarse de la sintaxis de tu shell (`export` en bash, `set -x` en fish). Lo que
-ya esté en el entorno gana: un `.env` no pisa una variable exportada a propósito.
-
-| Backend | Variable | Nota |
-|---|---|---|
-| OpenAI | `OPENAI_API_KEY` | familia `gpt-4.1` por defecto |
-| **Gemini** | `GEMINI_API_KEY` | tiene nivel gratuito; se usa vía su endpoint compatible con OpenAI |
-| **Groq** | `GROQ_API_KEY` | nivel gratuito, corre modelos de pesos abiertos |
-| OpenRouter | `OPENROUTER_API_KEY` | |
-| Vercel AI Gateway | `AI_GATEWAY_API_KEY` | una key para todos los proveedores |
-| Ollama / LM Studio | — | local; **hay que pedirlo** con `ORCHESTATI_PROVIDER=ollama` |
-
-Todo menos el gateway pasa por un único cliente compatible con OpenAI, así que
-agregar un destino nuevo es agregar un preset, no un proveedor.
-
-Los backends locales **no se autodetectan a propósito**: que un servidor esté
-escuchando en el puerto no significa que uno quiera usarlo.
-
-Los precios por tier salen de una tabla en `src/llm/model.ts` (tarifas de primera
-parte de Anthropic, referencia 2026-06). Alimenta el corte por presupuesto, así
-que un número inflado no es inofensivo: corta corridas que en realidad entraban.
-Un modelo fuera de la tabla se asume caro — sobrestimar corta de más y se nota;
-subestimar gasta de más y aparece en la factura.
-
-```ts
-import { Orchestrator } from 'orchestati';
-
-const o = new Orchestrator({ maxCostUsd: 0.25 });
-const res = await o.run('refactorizame este modulo');
-
-res.text;              // respuesta final
-res.decision.agents;   // quién la atendió
-res.decision.ranking;  // por qué ganó ese
-res.usage.costUsd;     // qué costó
-res.toolCalls;         // qué herramientas usó, y cuáles le denegaron
-res.trace;             // qué pasó, paso a paso
-```
-
-Con streaming y memoria de conversación:
-
-```ts
-import { Orchestrator, FileSessionStore } from 'orchestati';
-
-const o = new Orchestrator({ sessions: new FileSessionStore() });
-for await (const ev of o.stream('refactorizame esto', { sessionId: 'javier' })) {
-  if (ev.type === 'text') process.stdout.write(ev.delta);
-}
-```
-
-Para controlar qué puede tocar:
-
-```ts
-import { Orchestrator, askUser, denyAll } from 'orchestati';
-
-new Orchestrator({ confirm: denyAll() });              // sin herramientas
-new Orchestrator({ root: '/ruta/al/proyecto' });       // otro sandbox
-new Orchestrator({ confirm: askUser(async (req) => {   // tu propio gate
-  return await miUI.confirmar(req.summary, req.risk);
-}) });
-```
-
-## Agregar un agente
-
-No hay que tocar el router: se registra y entra a competir.
+No need to touch the router — register it and it joins the competition.
 
 ```ts
 import { llmAgent, createDefaultRegistry, Orchestrator } from 'orchestati';
@@ -433,13 +318,14 @@ import { llmAgent, createDefaultRegistry, Orchestrator } from 'orchestati';
 const sql = llmAgent({
   id: 'llm.sql',
   name: 'SQL',
-  description: 'Escribe y optimiza consultas SQL.',
+  description: 'Writes and optimizes SQL queries.',
   tier: 'standard',
   capabilities: ['code', 'analysis'],
   intents: ['code_generate', 'data_analysis'],
   cost: 0.4,
   comfortMax: 0.7,
-  system: 'Sos un experto en SQL…',
+  tools: ['read_file', 'search_code'],
+  system: 'You are a SQL expert…',
   accepts: (s) => (/\b(select|join|query|sql)\b/.test(s.normalized) ? 0.5 : 0),
 });
 
@@ -447,18 +333,105 @@ const registry = createDefaultRegistry().register(sql);
 const o = new Orchestrator({ registry });
 ```
 
-Para un agente que no use LLM (API, base de datos, cálculo local), implementá la
-interfaz `Agent` directamente — `src/agents/reflex.ts` es el ejemplo.
+For an agent that does not use an LLM (an API, a database, a local computation), implement the `Agent` interface directly — `src/agents/reflex.ts` is the worked example.
 
-## Estado
+### Add a tool
 
-119 tests cubren el analizador, el ranking del router, el bucle de escalado, el
-corte por presupuesto, la tolerancia a fallos, el loop de herramientas, la
-contención del sandbox (escape de rutas, allowlist de binarios, SSRF, `eval`), el
-clasificador semántico, las sesiones, el streaming y los endpoints del servidor
-— **incluidos pisos de accuracy sobre los dos sets held-out**, así que una
-regresión en el ruteo rompe el build en vez de pasar desapercibida.
+```ts
+import { z } from 'zod';
+import type { Tool } from 'orchestati';
 
-Lo que todavía no está: el ~20% de los sets de evaluación que el clasificador
-sigue errando, y las herramientas ejecutables desde el servidor con un gate
-interactivo real (hoy el servidor se queda en sólo-lectura a propósito).
+export const jiraTicket: Tool<{ key: string }> = {
+  name: 'jira_ticket',
+  description: 'Fetches a Jira ticket by key.',
+  risk: 'safe',                                   // safe | confirm | destructive
+  schema: z.object({ key: z.string() }),
+  summarize: (a) => `fetch ${a.key}`,             // shown in the confirmation prompt
+  execute: async (a, ctx) => ({ ok: true, content: await fetchTicket(a.key) }),
+};
+```
+
+### Control what it can touch
+
+```ts
+import { Orchestrator, askUser, denyAll } from 'orchestati';
+
+new Orchestrator({ confirm: denyAll() });              // no tools at all
+new Orchestrator({ root: '/path/to/project' });        // a different sandbox
+new Orchestrator({ confirm: askUser(async (req) => {   // your own gate
+  return await myUI.confirm(req.summary, req.risk);
+}) });
+```
+
+---
+
+## Configuration
+
+| Variable | Purpose |
+|---|---|
+| `ORCHESTATI_PROVIDER` | force a backend: `openai`, `gemini`, `groq`, `openrouter`, `gateway`, `ollama`, `lmstudio`, `mock` |
+| `ORCHESTATI_MODEL_LIGHT` … `_SWARM` | override the model for each tier |
+| `ORCHESTATI_BASE_URL` | your own OpenAI-compatible endpoint |
+| `PORT` | HTTP server port (default 3000) |
+
+Per-tier prices come from a table in `src/llm/openai-compatible.ts`. It feeds the budget cutoff, so an inflated number is not harmless: it cuts runs that would actually have fit. A model with no known rate is assumed expensive — overestimating cuts early and gets noticed; underestimating overspends and shows up on the invoice.
+
+---
+
+## Scripts
+
+| Command | Purpose |
+|---|---|
+| `pnpm chat` | interactive chat: routing, tokens and cost, live |
+| `pnpm dev "<request>"` | one-shot run |
+| `pnpm dev --explain "<request>"` | analysis and decision, without executing |
+| `pnpm dev --trace "<request>"` | run and print the trace |
+| `pnpm dev --dry-run "<request>"` | deny every tool: see what it *would* do |
+| `pnpm dev --yes "<request>"` | authorize tools without prompting |
+| `pnpm serve` | HTTP server, SSE and demo UI |
+| `pnpm table` | routing calibration bench |
+| `pnpm eval` · `pnpm eval b` | classifier accuracy on each held-out set |
+| `pnpm smoke` | smoke test against the real API, one request per tier |
+| `pnpm test` | 131 tests |
+
+---
+
+## Project layout
+
+```
+src/
+  analysis/        analyzer, lexicon, arbiter
+    semantic/      n-gram classifier, prototypes, vectorizer
+  router/          registry, multi-factor ranking, EWMA memory
+  agents/          the pool, LLM agent factory, reflex agents
+  tools/           types, registry, confirmation policies, sandbox
+    builtin/       fs, shell, calculator, http
+  runtime/         orchestrator, tool loop, sessions, trace
+  llm/             AI SDK base, gateway, OpenAI-compatible presets
+  core/            types, events, .env loading
+  ui/              demo page served at /
+  dev/             chat, smoke, routing table, evaluation
+```
+
+---
+
+## Testing and evaluation
+
+131 tests cover the analyzer, the router's ranking, the escalation loop, the budget cutoff, fault tolerance, the tool loop, sandbox containment (path escapes, binary allowlist, SSRF, `eval`), the semantic classifier, sessions, streaming and the server's endpoints.
+
+They include **accuracy floors on both held-out sets**, so a routing regression breaks the build instead of going unnoticed.
+
+```bash
+pnpm test
+pnpm typecheck
+```
+
+---
+
+## Status
+
+What is not there yet: the ~20% of the evaluation sets the classifier still gets wrong, and tools executable from the server behind a real interactive gate (today the server deliberately stays read-only).
+
+## License
+
+MIT

@@ -47,19 +47,25 @@ const usd = (n: number): string => (n === 0 ? '$0' : n < 0.01 ? `$${n.toFixed(5)
 // ---------------------------------------------------------------------------
 
 const EJEMPLOS: Array<{ texto: string; espera: string }> = [
-  { texto: 'hola', espera: 'reflex · sin LLM, $0' },
-  { texto: 'gracias, sos un capo', espera: 'reflex · sin LLM, $0' },
-  { texto: 'quien sos y que podes hacer', espera: 'reflex · describe el pool real' },
-  { texto: 'que es un closure en javascript', espera: 'light · modelo chico' },
-  { texto: 'cuanto es (2340 * 15) / 100', espera: 'standard · usa la herramienta calculator' },
-  { texto: 'explicame que hace el archivo src/router/router.ts', espera: 'standard · lee el archivo de verdad' },
-  { texto: 'escribime una funcion typescript que valide un email', espera: 'standard · agente programador' },
-  { texto: 'mi app tira TypeError: cannot read property map of undefined en src/list.tsx', espera: 'deep · cadena depurador → revisor' },
-  { texto: 'borra todos los registros de la tabla users en produccion', espera: 'standard · operador, pide confirmacion' },
-  { texto: 'disename la arquitectura de un sistema de facturacion multi-tenant con auditoria', espera: 'deep · cadena planificador → investigador → revisor' },
+  { texto: 'hi', espera: 'reflex · no LLM, $0' },
+  { texto: 'thanks, that was exactly it', espera: 'reflex · no LLM, $0' },
+  { texto: 'who are you and what can you do', espera: 'reflex · describes the real pool' },
+  { texto: 'what is a closure in javascript', espera: 'light · small model' },
+  { texto: 'how much is (2340 * 15) / 100', espera: 'standard · uses the calculator tool' },
+  { texto: 'explain what the file src/router/router.ts does', espera: 'standard · actually reads the file' },
+  { texto: 'write a typescript function that validates an email', espera: 'standard · coder agent' },
   {
-    texto: 'investiga y compara opciones de base de datos vectorial para RAG, despues armame un plan de migracion y ademas estima costos',
-    espera: 'swarm · tres agentes en paralelo + sintetizador',
+    texto: 'my app throws TypeError: cannot read property map of undefined in src/router/router.ts',
+    espera: 'deep · chain debugger → critic',
+  },
+  { texto: 'delete every row in the users table in production', espera: 'standard · operator, asks for confirmation' },
+  {
+    texto: 'design the full architecture of a multi-tenant billing system with auditing',
+    espera: 'deep · chain planner → researcher → critic',
+  },
+  {
+    texto: 'research and compare vector database options for RAG, then draft a migration plan and also estimate costs',
+    espera: 'swarm · three agents in parallel + synthesizer',
   },
 ];
 
@@ -119,15 +125,15 @@ class Contador {
 
   reporte(): string {
     const filas: string[] = [];
-    filas.push(C.bold('\n  Consumo de la sesion'));
+    filas.push(C.bold('\n  Session usage'));
     filas.push(
-      `  ${this.mensajes} mensaje(s) · ${this.inputTokens} entrada + ${this.outputTokens} salida = ${C.bold(
+      `  ${this.mensajes} message(s) · ${this.inputTokens} in + ${this.outputTokens} out = ${C.bold(
         String(this.inputTokens + this.outputTokens),
       )} tokens · ${C.bold(usd(this.costUsd))}`,
     );
 
     if (this.porTier.size) {
-      filas.push(C.dim('\n  por escalon'));
+      filas.push(C.dim('\n  by tier'));
       const orden: Tier[] = ['reflex', 'light', 'standard', 'deep', 'swarm'];
       for (const tier of orden) {
         const l = this.porTier.get(tier);
@@ -143,7 +149,7 @@ class Contador {
     }
 
     if (this.porAgente.size) {
-      filas.push(C.dim('\n  por agente'));
+      filas.push(C.dim('\n  by agent'));
       for (const [id, l] of [...this.porAgente].sort((a, b) => b[1].costUsd - a[1].costUsd)) {
         filas.push(
           `    ${id.padEnd(18)} ${String(l.n).padStart(2)}×  ${String(
@@ -155,7 +161,7 @@ class Contador {
 
     if (this.herramientas.size) {
       filas.push(
-        C.dim('\n  herramientas  ') +
+        C.dim('\n  tools  ') +
           [...this.herramientas].map(([n, c]) => `${n}×${c}`).join('  '),
       );
     }
@@ -173,8 +179,8 @@ class Contador {
     const light = this.porTier.get('light');
     const baratos = (reflex?.n ?? 0) + (light?.n ?? 0);
     if (baratos === 0) return undefined;
-    return `${baratos} de ${this.mensajes} pedido(s) no necesitaron el escalon caro` +
-      (reflex ? ` · ${reflex.n} se resolvieron sin llamar a ningun modelo` : '');
+    return `${baratos} of ${this.mensajes} request(s) did not need the expensive tier` +
+      (reflex ? ` · ${reflex.n} answered without calling any model` : '');
   }
 }
 
@@ -204,10 +210,10 @@ async function pedir(prompt: string): Promise<string | undefined> {
 
 async function confirmar(req: ConfirmationRequest): Promise<boolean> {
   const tinte = req.risk === 'destructive' ? C.red : C.yellow;
-  console.log(`\n  ${tinte('⚠')} ${C.bold(req.agentId)} quiere ${C.bold(req.summary)} ${C.dim(`[${req.tool} · ${req.risk}]`)}`);
-  if (req.risk === 'destructive') console.log(C.red('    puede no ser reversible'));
-  const r = (await pedir(`    ${C.bold('¿ejecutar? (s/N) ')}`))?.trim().toLowerCase();
-  return r === 's' || r === 'si' || r === 'y';
+  console.log(`\n  ${tinte('⚠')} ${C.bold(req.agentId)} wants to ${C.bold(req.summary)} ${C.dim(`[${req.tool} · ${req.risk}]`)}`);
+  if (req.risk === 'destructive') console.log(C.red('    this may not be reversible'));
+  const r = (await pedir(`    ${C.bold('run it? (y/N) ')}`))?.trim().toLowerCase();
+  return r === 'y' || r === 'yes' || r === 's' || r === 'si';
 }
 
 const envCargado = loadEnv();
@@ -224,8 +230,8 @@ const o = new Orchestrator({
 // --- Cabecera ---------------------------------------------------------------
 
 const preset = isPresetName(model.kind) ? PRESETS[model.kind] : undefined;
-console.log(`\n${C.bold('Orchestati')} ${C.dim('· chat de ejemplo')}`);
-console.log(C.dim('El ruteo es local y no gasta tokens. Lo que ves cobrado es solo lo que el agente elegido consumio.\n'));
+console.log(`\n${C.bold('Orchestati')} ${C.dim('· example chat')}`);
+console.log(C.dim('Routing is local and spends no tokens. What you see billed is only what the chosen agent consumed.\n'));
 console.log(`  backend   ${C.bold(preset?.label ?? model.kind)}`);
 if (envCargado) console.log(C.dim(`  env       ${envCargado.replace(process.cwd() + '/', '')}`));
 if (preset) {
@@ -233,19 +239,19 @@ if (preset) {
     const tinte = TINTE[tier] ?? C.cyan;
     console.log(`  ${tinte(tier.padEnd(9))} ${C.dim(modelForTierIn(preset, tier))}`);
   }
-  console.log(`  ${C.green('reflex'.padEnd(9))} ${C.dim('— ningun modelo, respuesta inmediata')}`);
+  console.log(`  ${C.green('reflex'.padEnd(9))} ${C.dim('— no model, immediate response')}`);
 } else if (model.kind === 'mock') {
-  console.log(C.yellow('  ⚠ sin credenciales: MockModel. El ruteo es real, las respuestas no.'));
+  console.log(C.yellow('  ⚠ no credentials: MockModel. The routing is real, the answers are not.'));
 }
-console.log(C.dim('\n  /ejemplos  lista los caminos  ·  /1 .. /11  corre uno'));
-console.log(C.dim('  /costo     consumo acumulado  ·  /traza  detalle  ·  /salir\n'));
+console.log(C.dim('\n  /examples  list the paths   ·  /1 .. /11  run one'));
+console.log(C.dim('  /cost      running total    ·  /trace  detail  ·  /exit\n'));
 
 let traza = false;
 // Para no repetir el reporte si lo ultimo que se pidio fue /costo.
 let yaMostrado = false;
 
 function mostrarEjemplos(): void {
-  console.log(C.bold('\n  Un ejemplo por camino\n'));
+  console.log(C.bold('\n  One example per routing path\n'));
   EJEMPLOS.forEach((e, i) => {
     const tier = e.espera.split(' ')[0]!;
     const tinte = TINTE[tier] ?? C.cyan;
@@ -266,7 +272,7 @@ async function enviar(texto: string): Promise<void> {
         const s = ev.signals;
         console.log(
           C.gris(
-            `  análisis  ${s.primaryIntent} · complejidad ${s.complexity.toFixed(2)} · confianza ${s.confidence.toFixed(2)} · ${s.intentSource}`,
+            `  analysis  ${s.primaryIntent} · complexity ${s.complexity.toFixed(2)} · confidence ${s.confidence.toFixed(2)} · ${s.intentSource}`,
           ),
         );
         break;
@@ -285,11 +291,11 @@ async function enviar(texto: string): Promise<void> {
       case 'tool': {
         const r = ev.record;
         const marca = r.approved ? (r.result.ok ? C.green('✓') : C.yellow('✗')) : C.red('⊘');
-        console.log(C.dim(`  ${marca} ${r.call.name}${r.approved ? '' : ' (no autorizada)'}`));
+        console.log(C.dim(`  ${marca} ${r.call.name}${r.approved ? '' : ' (not authorized)'}`));
         break;
       }
       case 'escalate':
-        console.log(C.yellow(`  ↑ escalado ${ev.from} → ${ev.to}: ${ev.reason}`));
+        console.log(C.yellow(`  ↑ escalated ${ev.from} → ${ev.to}: ${ev.reason}`));
         break;
       case 'text':
         if (ev.agentId === primario) {
@@ -308,14 +314,14 @@ async function enviar(texto: string): Promise<void> {
         const u = r.usage;
         console.log(
           C.dim(
-            `\n\n  este mensaje  ${u.inputTokens}+${u.outputTokens} tok · ${C.bold(usd(u.costUsd))} · ${Date.now() - t0}ms`,
+            `\n\n  this message  ${u.inputTokens}+${u.outputTokens} tok · ${C.bold(usd(u.costUsd))} · ${Date.now() - t0}ms`,
           ),
         );
         console.log(
           C.dim(
-            `  sesion        ${contador.inputTokens + contador.outputTokens} tok · ${C.bold(
+            `  session       ${contador.inputTokens + contador.outputTokens} tok · ${C.bold(
               usd(contador.costUsd),
-            )} en ${contador.mensajes} mensaje(s)\n`,
+            )} over ${contador.mensajes} message(s)\n`,
           ),
         );
         if (traza) {
@@ -341,19 +347,19 @@ for (;;) {
   if (cruda === undefined) break;
   const linea = cruda.trim();
   if (!linea) continue;
-  if (linea === '/salir' || linea === '/exit') break;
-  if (linea === '/ejemplos') {
+  if (linea === '/salir' || linea === '/exit' || linea === '/quit') break;
+  if (linea === '/ejemplos' || linea === '/examples') {
     mostrarEjemplos();
     continue;
   }
-  if (linea === '/costo') {
+  if (linea === '/costo' || linea === '/cost') {
     console.log(contador.reporte());
     yaMostrado = true;
     continue;
   }
-  if (linea === '/traza') {
+  if (linea === '/traza' || linea === '/trace') {
     traza = !traza;
-    console.log(C.dim(`  traza ${traza ? 'on' : 'off'}\n`));
+    console.log(C.dim(`  trace ${traza ? 'on' : 'off'}\n`));
     continue;
   }
   yaMostrado = false;
@@ -361,7 +367,7 @@ for (;;) {
   if (num) {
     const e = EJEMPLOS[Number(num[1]) - 1];
     if (!e) {
-      console.log(C.red(`  no hay ejemplo ${num[1]}\n`));
+      console.log(C.red(`  no example ${num[1]}\n`));
       continue;
     }
     console.log(C.dim(`  › ${e.texto}`));
