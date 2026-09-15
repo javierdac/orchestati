@@ -12,8 +12,9 @@
  *   pnpm tune --from=sessions        usa los pedidos reales guardados
  *   pnpm tune --from=pedidos.txt     usa un archivo, un pedido por linea
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { Orchestrator } from '../runtime/orchestrator.js';
 import { createModelClient } from '../llm/model.js';
 import { loadEnv } from '../core/env.js';
@@ -82,7 +83,9 @@ async function perfilar(spec: string | undefined): Promise<Perfil> {
   const { origen, pedidos } = await cargarPedidos(spec);
   if (pedidos.length === 0) throw new Error(`No hay pedidos en ${origen}`);
 
-  const o = new Orchestrator({ model, confirm: allowAll(), root: process.cwd(), maxCostUsd: 0.5 });
+  // Igual que en la evaluacion de calidad: sandbox descartable, no el repo.
+  const sandbox = await mkdtemp(join(tmpdir(), 'orchestati-profile-'));
+  const o = new Orchestrator({ model, confirm: allowAll(), root: sandbox, maxCostUsd: 0.5 });
   const registry = o.registry;
 
   console.log(`\n${C.bold('Perfilando')} ${pedidos.length} pedido(s) de ${origen}`);

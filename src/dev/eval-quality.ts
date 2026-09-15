@@ -11,6 +11,9 @@
  *
  * Gasta plata de verdad: requiere un backend real y se corre a mano.
  */
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Orchestrator } from '../runtime/orchestrator.js';
 import { createModelClient } from '../llm/model.js';
 import { loadEnv } from '../core/env.js';
@@ -100,7 +103,16 @@ async function main(): Promise<void> {
   const limite = Number(process.argv.find((a) => a.startsWith('--limit='))?.split('=')[1] ?? QUALITY_SET.length);
   const casos = QUALITY_SET.slice(0, limite);
 
-  const o = new Orchestrator({ model, confirm: allowAll(), root: process.cwd(), maxCostUsd: 0.5 });
+  /**
+   * Sandbox descartable, no el repo.
+   *
+   * Esto corre con `allowAll()` para medir a los agentes usando herramientas
+   * de verdad, y con la raiz apuntando al proyecto uno de ellos escribio un
+   * archivo en `src/` que termino commiteado. Un agente bajo evaluacion no
+   * tiene por que poder tocar el codigo que lo evalua.
+   */
+  const sandbox = await mkdtemp(join(tmpdir(), 'orchestati-eval-'));
+  const o = new Orchestrator({ model, confirm: allowAll(), root: sandbox, maxCostUsd: 0.5 });
 
   /**
    * La linea base tiene que quedar FIJA aunque se reconfiguren los escalones.

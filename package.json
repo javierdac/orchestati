@@ -41,8 +41,11 @@
   },
   "files": [
     "dist",
+    "!dist/dev",
     "README.md",
     "README.es.md",
+    "MANUAL.md",
+    "INTEGRATION.md",
     "LICENSE"
   ],
   "bin": {
@@ -53,7 +56,7 @@
   },
   "scripts": {
     "dev": "tsx src/cli.ts",
-    "build": "tsc -p tsconfig.json && cp -r src/ui dist/ui",
+    "build": "rm -rf dist && tsc -p tsconfig.json && cp -r src/ui dist/ui",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

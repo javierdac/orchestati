@@ -5,6 +5,9 @@
  * prueba de que las decisiones que se toman offline sobreviven al mundo.
  */
 import { loadEnv } from '../core/env.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Orchestrator } from '../runtime/orchestrator.js';
 import { createModelClient } from '../llm/model.js';
 import { allowAll, autoSafe } from '../tools/confirm.js';
@@ -50,7 +53,8 @@ const o = new Orchestrator({
   model,
   confirm: permisivo ? allowAll() : autoSafe(),
   sessions: new InMemorySessionStore(),
-  root: process.cwd(),
+  // Sandbox descartable: el smoke puede correr con --yes.
+  root: mkdtempSync(join(tmpdir(), 'orchestati-smoke-')),
   maxCostUsd: 0.5,
 });
 
