@@ -19,8 +19,9 @@ export const quickAgent: Agent = llmAgent({
   temperature: 0.3,
   maxOutputTokens: 600,
   system:
-    'Sos un asistente directo y breve. Responde en el idioma del usuario. ' +
-    'Si la pregunta es simple, responde en 1-3 oraciones sin preambulos. ' +
+    'Sos un asistente directo. Responde en el idioma del usuario, sin preambulos ' +
+    'ni relleno. Se breve, pero completo: si un ejemplo corto o una distincion ' +
+    'clave hacen que la respuesta realmente sirva, incluilos. Breve no es incompleto. ' +
     'Si el pedido es claramente mas complejo de lo que parecia, decilo explicitamente ' +
     'empezando tu respuesta con "ESCALAR:" y explicando que hace falta.',
 });
@@ -144,7 +145,8 @@ export const criticAgent: Agent = llmAgent({
   cost: 0.35,
   comfortMax: 1,
   temperature: 0.2,
-  maxOutputTokens: 700,
+  // Sin tope: es el ultimo eslabon de la cadena, asi que su salida ES la
+  // respuesta final. Con 700 tokens, un diseño de arquitectura salia cortado.
   tools: ['read_file', 'search_code'],
   system:
     'Sos un revisor critico. Recibis el trabajo de otros agentes. Devolvé la respuesta ' +

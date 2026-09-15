@@ -94,10 +94,27 @@ To hit real models, copy `.env.example` to `.env` and set one key. Entry points 
 |---|---|---|
 | OpenAI | `OPENAI_API_KEY` | defaults to the `gpt-4.1` family |
 | **Gemini** | `GEMINI_API_KEY` | has a free tier; used through its OpenAI-compatible endpoint |
-| **Groq** | `GROQ_API_KEY` | free tier, runs open-weight models |
+| **Groq** | `GROQ_API_KEY` | free tier, runs open-weight models (Llama, Kimi) |
+| Moonshot / Kimi | `MOONSHOT_API_KEY` | |
+| DeepSeek | `DEEPSEEK_API_KEY` | |
+| Cerebras | `CEREBRAS_API_KEY` | open-weight models, very fast |
 | OpenRouter | `OPENROUTER_API_KEY` | |
 | Vercel AI Gateway | `AI_GATEWAY_API_KEY` | one key for every provider |
 | Ollama / LM Studio | — | local; **must be requested** with `ORCHESTATI_PROVIDER=ollama` |
+
+`pnpm models` asks each configured provider what it actually offers, so you do not have to trust a hardcoded list of model ids.
+
+### Mixing providers across tiers
+
+This is the setting that decides whether routing actually saves money.
+
+```bash
+ORCHESTATI_MODEL_LIGHT=groq:llama-3.1-8b-instant
+ORCHESTATI_MODEL_STANDARD=groq:llama-3.3-70b-versatile
+ORCHESTATI_MODEL_DEEP=openai:gpt-4.1
+```
+
+Within one provider, adjacent tiers are typically ~5× apart in price. Since `chain` and `parallel` run two or three agents, the middle tier ends up costing about the same as a single call to the expensive one — and the routing stops paying for itself. Across providers the gap is 10×–40×, which is where the cheap tier earns its place. Measured numbers are in [the evaluation section](#does-routing-cheap-actually-save-money).
 
 Everything except the gateway goes through a single OpenAI-compatible client, so adding a new destination means adding a preset, not a provider.
 
@@ -193,6 +210,47 @@ The lexicon still wins when it is confident: it is exact, auditable and free. Th
 Every prediction carries its nearest prototype as evidence (`≈ "let's draw up the quarterly roadmap" (0.41)`), so you can always audit why it said what it said.
 
 **Two evaluation sets, and the second is the one that matters.** Measuring repeatedly against the same held-out set wears it out: every adjustment you make while looking at its errors turns it, bit by bit, into a training set. Set B was written *before* the prototypes were expanded and without looking at set A's failures. When coverage was expanded, A gained 8 points and **B, never inspected, gained 18** — so the improvement generalizes rather than overfitting. A test also asserts that no evaluation phrase appears verbatim among the prototypes.
+
+#### Does routing cheap actually save money?
+
+This is the half of the thesis that went unmeasured the longest, and the answer is **not unconditionally — it depends on your traffic mix, and on mixing providers**.
+
+`pnpm eval:quality` runs each request twice: once through the orchestrator, once by sending it straight to the expensive model — the strawman this project claims to beat — and has a blind judge compare the answers with alternating positions. It costs real money, so it is opt-in and never runs in CI.
+
+Measured on 14 self-contained requests against OpenAI, with the baseline pinned to `gpt-4.1`:
+
+```
+  Quality
+    wins or ties   79%  (2 wins, 9 ties)
+    loses          21%  (3)
+
+  Cost per tier    (routed vs. sending that same request to the expensive model)
+    reflex     2 cases  $0.00000 vs $0.00039   100% cheaper
+    light      3 cases  $0.00020 vs $0.00352    94% cheaper
+    standard   7 cases  $0.01086 vs $0.00967    12% more expensive
+    deep       2 cases  $0.01581 vs $0.00726   118% more expensive
+```
+
+**The global number was hiding the interesting one.** Savings on the cheap tiers are enormous — 94% to 100% — but `chain` and `parallel` run two or three agents, so the expensive tiers cost *more* than a single call. With this configuration the break-even point sits at 59% of traffic landing on the cheap tiers. A support inbox clears that easily; a set of hard engineering questions does not.
+
+That is also what makes [mixing providers](#mixing-providers-across-tiers) the decisive setting rather than a nicety. Same 14 requests, same fixed baseline, the only change being cheaper models on the middle tiers:
+
+| | Default config | Cheap middle tiers |
+|---|---|---|
+| **Cost vs. always-expensive** | 29% **more** expensive | **50% saved** |
+| Quality (wins or ties) | 79% | 71% |
+| Break-even traffic mix | 59% cheap | **25% cheap** |
+| `standard` tier | 12% more expensive | 74% cheaper |
+| `deep` tier | 118% more expensive | 9% more expensive |
+
+So the trade is legible: eight points of quality buy a swing from *losing* money to saving half of it, and the break-even drops to a level most real traffic clears comfortably. Widening the gap further with a genuinely cheap provider on the light tier — an 8B Llama on Groq, a Gemini Flash — moves it further still.
+
+The honest summary is that **Orchestati is not unconditionally cheaper, and its default configuration is not the one that saves money.** Routing pays when the cheap tiers are genuinely cheap and enough of your traffic lands on them. `pnpm eval:quality` is there so you can measure that for your own traffic instead of taking this table's word for it.
+
+Two findings came out of building this, both of them defects rather than tradeoffs:
+
+- **`llm.critic` capped its output at 700 tokens**, and it is the last link of every chain — so it was the one producing the final answer. Architecture answers came back truncated. Removing the cap took quality from 57% to 71%.
+- **The first version of the experiment moved its own control.** The baseline resolved through the `deep` tier, so making that tier cheaper made the baseline cheaper too. Pinning the baseline to a fixed model took the reading from 64% to 79%. An experiment whose control moves measures nothing.
 
 #### Measuring the routing itself
 

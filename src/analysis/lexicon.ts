@@ -167,6 +167,8 @@ export const INTENT_RULES: IntentRule[] = [
     weight: 1,
     patterns: [
       /\b(traduc(i|e|ime|ir)|pasa(lo)? a (ingles|espanol|portugues|frances)|en ingles por favor)\b/,
+      /\bcomo se (dice|escribe)\b.{0,40}\b(en|al) (ingles|aleman|frances|italiano|portugues|espanol|castellano|japones|chino)\b/,
+      /\bhow do you say\b.{0,40}\bin (english|spanish|german|french|italian|portuguese)\b/,
       /\b(translate|in (english|spanish|french|portuguese) please)\b/,
     ],
   },

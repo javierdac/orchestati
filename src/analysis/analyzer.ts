@@ -345,12 +345,29 @@ export function suggestTier(
   return 'deep';
 }
 
-/** Confianza: que tan destacada esta la intencion primaria sobre la segunda. */
+/**
+ * Confianza en la intencion primaria.
+ *
+ * Tiene dos componentes y hacen falta los dos. El margen sobre la segunda dice
+ * si hay competencia; la fuerza absoluta dice si el match significa algo.
+ *
+ * Con solo el margen, un unico match debil quedaba con confianza altisima
+ * —no tenia contra quien competir— y eso hacia dos cosas malas: saltearse la
+ * consulta al semantico y habilitar el camino reflex. "como se dice 'buenas
+ * noches' en aleman" matcheaba `greeting` con 0.16 por la palabra "buenas", y
+ * se contestaba con un saludo.
+ */
 function scoreConfidence(intents: ScoredIntent[]): number {
   const top = intents[0]?.score ?? 0;
   const second = intents[1]?.score ?? 0;
+
   const margin = top === 0 ? 0 : (top - second) / top;
-  return Math.min(1, Math.max(0.1, 0.35 + margin * 0.5 + Math.min(top, 1.5) * 0.15));
+  const base = 0.35 + margin * 0.5 + Math.min(top, 1.5) * 0.15;
+
+  // Un match por debajo de este score es una pista, no una deteccion.
+  const fuerza = Math.min(1, top / 0.8);
+
+  return Math.min(1, Math.max(0.1, base * (0.4 + 0.6 * fuerza)));
 }
 
 export interface AnalyzeOptions {

@@ -84,6 +84,39 @@ export const PRESETS = {
       swarm: 'llama-3.3-70b-versatile',
     },
   },
+  moonshot: {
+    label: 'Moonshot / Kimi',
+    baseURL: 'https://api.moonshot.ai/v1',
+    keyEnv: ['MOONSHOT_API_KEY', 'KIMI_API_KEY'],
+    models: {
+      light: 'moonshot-v1-8k',
+      standard: 'kimi-k2-0905-preview',
+      deep: 'kimi-k2-0905-preview',
+      swarm: 'kimi-k2-0905-preview',
+    },
+  },
+  deepseek: {
+    label: 'DeepSeek',
+    baseURL: 'https://api.deepseek.com/v1',
+    keyEnv: ['DEEPSEEK_API_KEY'],
+    models: {
+      light: 'deepseek-chat',
+      standard: 'deepseek-chat',
+      deep: 'deepseek-reasoner',
+      swarm: 'deepseek-chat',
+    },
+  },
+  cerebras: {
+    label: 'Cerebras (modelos abiertos, muy rapido)',
+    baseURL: 'https://api.cerebras.ai/v1',
+    keyEnv: ['CEREBRAS_API_KEY'],
+    models: {
+      light: 'llama3.1-8b',
+      standard: 'llama-3.3-70b',
+      deep: 'llama-3.3-70b',
+      swarm: 'llama-3.3-70b',
+    },
+  },
   openrouter: {
     label: 'OpenRouter',
     baseURL: 'https://openrouter.ai/api/v1',
@@ -127,10 +160,35 @@ export function isPresetName(name: string): name is PresetName {
   return name in PRESETS;
 }
 
+/**
+ * Un escalon puede apuntar a otro proveedor: `groq:llama-3.3-70b-versatile`.
+ *
+ * Es lo que permite mezclar. La diferencia de precio entre escalones del mismo
+ * proveedor suele ser de 5x, y con eso correr tres agentes en el escalon medio
+ * cuesta lo mismo que uno en el caro. Entre proveedores la brecha es de 10x a
+ * 40x, y ahi el ruteo recupera su sentido economico.
+ */
+export function parseTierSpec(spec: string): { preset?: PresetName; model: string } {
+  const i = spec.indexOf(':');
+  if (i === -1) return { model: spec.trim() };
+
+  const posible = spec.slice(0, i).trim();
+  // Ojo: un id de Ollama tambien lleva dos puntos ("qwen3:8b"), asi que solo
+  // se interpreta como proveedor si es un preset conocido.
+  if (!isPresetName(posible)) return { model: spec.trim() };
+  return { preset: posible, model: spec.slice(i + 1).trim() };
+}
+
 /** El modelo configurado para un tier, con el entorno pisando el default. */
-export function modelForTierIn(preset: EndpointPreset, tier: LlmTier): string {
+export function modelForTierIn(
+  preset: EndpointPreset,
+  tier: LlmTier,
+  overrides?: Partial<Record<LlmTier, string>>,
+): string {
+  const propio = overrides?.[tier];
+  if (propio) return propio;
   const env = process.env[`ORCHESTATI_MODEL_${tier.toUpperCase()}`];
-  return env?.trim() || preset.models[tier];
+  return parseTierSpec(env?.trim() || preset.models[tier]).model;
 }
 
 export class OpenAICompatibleModel extends AiSdkModel {
@@ -140,6 +198,8 @@ export class OpenAICompatibleModel extends AiSdkModel {
   constructor(
     private preset: EndpointPreset,
     private name: string,
+    /** Modelo fijo por escalon, por encima del preset y del entorno. */
+    private overrides?: Partial<Record<LlmTier, string>>,
   ) {
     super();
     this.kind = name;
@@ -147,7 +207,7 @@ export class OpenAICompatibleModel extends AiSdkModel {
 
   protected resolveModel(tier: LlmTier): ResolvedModel {
     if (!this.provider) throw new Error(`${this.name}: falta llamar a init()`);
-    const id = modelForTierIn(this.preset, tier);
+    const id = modelForTierIn(this.preset, tier, this.overrides);
     return {
       id: `${this.name}:${id}`,
       model: this.provider(id),

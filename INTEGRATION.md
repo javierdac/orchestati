@@ -364,6 +364,18 @@ o.recordFeedback(res.id, rating === 'up' ? 1 : 0);
 
 ## Controlling cost
 
+**Start here: the tier models decide whether routing saves anything.** Measured on 14 requests, the default single-provider configuration came out 29% *more* expensive than sending everything to the big model, because `chain` and `parallel` run two or three agents and adjacent tiers of one provider are only ~5× apart in price. Pointing the middle tiers at genuinely cheap models turned that into 50% savings.
+
+```bash
+ORCHESTATI_MODEL_LIGHT=groq:llama-3.1-8b-instant
+ORCHESTATI_MODEL_STANDARD=groq:llama-3.3-70b-versatile
+ORCHESTATI_MODEL_DEEP=openai:gpt-4.1
+```
+
+Each tier takes `provider:model` or a bare `model`. Run `pnpm eval:quality` against your own requests before assuming any configuration saves you money.
+
+
+
 Budgets are per run, so enforce per-user limits outside and per-run limits inside:
 
 ```ts

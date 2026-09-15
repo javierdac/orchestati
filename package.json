@@ -64,7 +64,9 @@
     "chat": "tsx src/dev/chat.ts",
     "eval:routing": "tsx src/dev/eval-routing.ts",
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build",
-    "verify:package": "bash scripts/verify-package.sh"
+    "verify:package": "bash scripts/verify-package.sh",
+    "eval:quality": "tsx src/dev/eval-quality.ts",
+    "models": "tsx src/dev/models.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.48",

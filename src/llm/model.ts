@@ -1,5 +1,7 @@
 import { AiSdkModel, type LlmTier, type ResolvedModel } from './ai-sdk-base.js';
 import { OpenAICompatibleModel, PRESETS, isPresetName, presetsWithCredentials } from './openai-compatible.js';
+import { createMixedModel } from './mixed.js';
+import type { PresetName } from './openai-compatible.js';
 import type { ModelClient, ModelRequest, ModelResponse, Tier, ToolCall } from '../core/types.js';
 
 /**
@@ -186,16 +188,19 @@ export async function createModelClient(): Promise<ModelClient> {
 
   if (forzado === 'mock') return new MockModel();
   if (forzado === 'gateway') return new GatewayModel();
-  if (forzado && isPresetName(forzado)) {
-    return new OpenAICompatibleModel(PRESETS[forzado], forzado).init();
+  if (forzado && !isPresetName(forzado)) {
+    throw new Error(`ORCHESTATI_PROVIDER desconocido: ${forzado}`);
   }
-  if (forzado) throw new Error(`ORCHESTATI_PROVIDER desconocido: ${forzado}`);
+
+  const base: PresetName | undefined = forzado && isPresetName(forzado) ? forzado : presetsWithCredentials()[0];
+
+  if (base) {
+    const cliente = await new OpenAICompatibleModel(PRESETS[base], base).init();
+    // Si algun escalon nombra otro proveedor, se arma un cliente mezclado.
+    return (await createMixedModel(base, cliente)) ?? cliente;
+  }
 
   if (process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN) return new GatewayModel();
-
-  const conKey = presetsWithCredentials()[0];
-  if (conKey) return new OpenAICompatibleModel(PRESETS[conKey], conKey).init();
-
   return new MockModel();
 }
 
