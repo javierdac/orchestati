@@ -275,11 +275,24 @@ It also only measures money. A cheaper model can answer worse and that does not 
 
 | Configuration | Quality (wins or ties) | Cost vs. always-expensive |
 |---|---|---|
-| Default | 79% | 29% **more** expensive |
-| Cheapest everywhere (picked by hand) | 71% | 50% saved |
+| Default, one provider | 79% | 29% **more** expensive |
+| Cheapest everywhere, picked by hand | 71% | 50% saved |
 | **What `tune` recommended** | **86%** | **31% saved** |
+| Open 120B model on `deep` (Groq) | 86% | 13% saved |
 
 The tool's recommendation beat the hand-picked one on both axes. It changes a single tier — the one carrying 84% of the spend — which is also why a quality drop would have had an obvious cause.
+
+The last row carries the most interesting result and the most useful warning. **An open-weight model held the hardest tier**: `openai/gpt-oss-120b` scored the same 86% as a frontier model on `deep`. Capability was not the problem. What stopped it was quota — see below.
+
+#### Rate limits are part of the cost
+
+A configuration that cannot handle your traffic is not cheaper, it is unusable, and the sweep used to ignore this entirely.
+
+Running that Groq configuration failed with a limit its own console does not list: **1,000 output tokens per minute**. A request whose *expected* output exceeds it is rejected outright — not queued, not slowed. Retrying cannot help, because the same request will always be too large.
+
+That rules the free tier out of `standard` and `deep` in this system, whose agents routinely produce more than that. `pnpm tune` now knows: it reads limits from the presets, checks them against the *largest* request in the profile (the limit applies per request, so one is enough to fail), and stops proposing configurations it knows will be rejected — instead of recommending one with a warning nobody reads in time.
+
+The same failure exposed a real bug in the retry layer: it kept retrying a rejection the provider had already marked `x-should-retry: false`, with a message that literally said *reduce max_tokens*. Retrying a request that is too large burns time and quota to fail identically.
 
 #### Measuring the routing itself
 
