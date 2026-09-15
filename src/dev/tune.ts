@@ -20,16 +20,25 @@ import { loadEnv } from '../core/env.js';
 import { allowAll } from '../tools/confirm.js';
 import { cargarPedidos } from './requests.js';
 import {
+  cargarCalibracion,
+  guardarCalibracion,
+  medirModelo,
+  factorVerbosidad,
+  CALIBRATION_PROMPTS,
+  RUTA_CALIBRACION,
+  type Calibracion,
+} from './calibration.js';
+import {
   PRESETS,
   priceOf,
   pricedModels,
   isPresetName,
   presetUsable,
+  presetOf,
   parseTierSpec,
   limitsOf,
   type PresetName,
 } from '../llm/openai-compatible.js';
-import type { EndpointPreset } from '../llm/openai-compatible.js';
 import type { LlmTier } from '../llm/ai-sdk-base.js';
 import type { Tier } from '../core/types.js';
 
@@ -109,9 +118,30 @@ async function perfilar(spec: string | undefined): Promise<Perfil> {
 
 type Config = Partial<Record<LlmTier, string>>;
 
-function costoDe(perfil: Perfil, config: Config, base: PresetName): { total: number; inciertos: Set<string> } {
+interface CostoOpts {
+  /** Medidas de verbosidad, para corregir los tokens del perfil. */
+  cal?: Calibracion;
+  /** Que modelo produjo los tokens del perfil, por escalon. */
+  referencia?: Config;
+}
+
+/**
+ * Costo de una configuracion sobre el perfil.
+ *
+ * Los tokens del perfil los produjo OTRO modelo. Si hay calibracion, se
+ * corrigen por cuanto escribe el candidato comparado con el de referencia;
+ * si no, se usan tal cual y el resultado sirve para ordenar, no para
+ * presupuestar.
+ */
+function costoDe(
+  perfil: Perfil,
+  config: Config,
+  base: PresetName,
+  opts: CostoOpts = {},
+): { total: number; inciertos: Set<string>; sinCalibrar: Set<string> } {
   let total = 0;
   const inciertos = new Set<string>();
+  const sinCalibrar = new Set<string>();
 
   for (const p of perfil.pedidos) {
     for (const tier of TIERS) {
@@ -122,10 +152,19 @@ function costoDe(perfil: Perfil, config: Config, base: PresetName): { total: num
       const precio = priceOf(spec, base);
       if (!precio) continue;
       if (!precio.known) inciertos.add(spec);
-      total += (uso.inputTokens * precio.in + uso.outputTokens * precio.out) / 1_000_000;
+
+      // Correccion por verbosidad: es el termino que hacia fallar la
+      // prediccion cuando el candidato era un modelo de razonamiento.
+      const ref = opts.referencia?.[tier];
+      const factor = opts.cal && ref ? factorVerbosidad(opts.cal, spec, ref) : undefined;
+      if (opts.cal && ref && spec !== ref && !factor) sinCalibrar.add(spec);
+
+      const entrada = uso.inputTokens * (factor?.in ?? 1);
+      const salida = uso.outputTokens * (factor?.out ?? 1);
+      total += (entrada * precio.in + salida * precio.out) / 1_000_000;
     }
   }
-  return { total, inciertos };
+  return { total, inciertos, sinCalibrar };
 }
 
 /** La configuracion que esta activa ahora mismo. */
@@ -157,6 +196,7 @@ async function barrer(spec: string | undefined): Promise<void> {
   }
   const perfil = JSON.parse(raw) as Perfil;
   const base: PresetName = isPresetName(perfil.backend) ? perfil.backend : 'openai';
+  const cal = await cargarCalibracion();
 
   const json = process.argv.includes('--json');
   const log = (...args: unknown[]): void => {
@@ -170,7 +210,16 @@ async function barrer(spec: string | undefined): Promise<void> {
 
   // --- Donde se va la plata -------------------------------------------------
   const actual = configActual(base);
-  const { total: costoActual } = costoDe(perfil, actual, base);
+
+  /**
+   * Todo el barrido pasa por aca para que la correccion por verbosidad se
+   * aplique siempre con la misma referencia: los modelos que produjeron los
+   * tokens del perfil.
+   */
+  const costo = (config: Config): ReturnType<typeof costoDe> =>
+    costoDe(perfil, config, base, { cal, referencia: actual });
+
+  const { total: costoActual } = costo(actual);
 
   log(C.bold('  Donde se va la plata'));
   for (const tier of TIERS) {
@@ -191,7 +240,7 @@ async function barrer(spec: string | undefined): Promise<void> {
   const reflex = perfil.pedidos.filter((p) => p.tier === 'reflex').length;
   if (reflex) log(C.dim(`    reflex    ${reflex} pedido(s) sin ninguna llamada`));
 
-  const mayor = TIERS.map((t) => ({ tier: t, costo: costoDe(perfil, { [t]: actual[t] }, base).total }))
+  const mayor = TIERS.map((t) => ({ tier: t, costo: costo({ [t]: actual[t] }).total }))
     .sort((a, b) => b.costo - a.costo)[0];
   if (mayor && costoActual > 0 && mayor.costo / costoActual > 0.5) {
     log(
@@ -200,6 +249,24 @@ async function barrer(spec: string | undefined): Promise<void> {
           `cambiar ese escalon solo rinde mas que optimizar todos los demas juntos.`,
       ),
     );
+  }
+
+  // --- Verbosidad medida ----------------------------------------------------
+  const medidos = Object.entries(cal).filter(([, m]) => !m.error && m.samples > 0);
+  if (medidos.length > 1) {
+    const menor = medidos.reduce((a, b) => (a[1].outputTokens <= b[1].outputTokens ? a : b));
+    const verborragicos = medidos.filter(([, m]) => m.outputTokens / menor[1].outputTokens >= 2);
+
+    if (verborragicos.length) {
+      log(`\n${C.bold('  Cuidado con el precio por token')}`);
+      log(
+        C.dim('    Estos escriben mucho mas que el resto, asi que su precio por token engaña:'),
+      );
+      for (const [spec, m] of verborragicos.sort((a, b) => b[1].outputTokens - a[1].outputTokens)) {
+        const x = m.outputTokens / menor[1].outputTokens;
+        log(C.yellow(`      ${spec.padEnd(34)} ${x.toFixed(1)}× mas verborragico que ${menor[0]}`));
+      }
+    }
   }
 
   // --- Que costaria cada modelo en cada escalon -----------------------------
@@ -221,8 +288,7 @@ async function barrer(spec: string | undefined): Promise<void> {
   const disponible = (spec: string): boolean => {
     const { preset } = parseTierSpec(spec);
     if (!preset) return false;
-    const p: EndpointPreset = PRESETS[preset];
-    if (p.local) return incluirLocales;
+    if (presetOf(preset).local) return incluirLocales;
     return todosLosProveedores || presetUsable(preset);
   };
 
@@ -286,7 +352,7 @@ async function barrer(spec: string | undefined): Promise<void> {
       .filter((c) => viabilidadDe(tier, c.spec).ok)
       .map((c) => ({
         spec: c.spec,
-        costo: costoDe(perfil, { [tier]: c.spec }, base).total,
+        costo: costo({ [tier]: c.spec }).total,
         // Con precios empatados —pasa cuando varios usan el fallback del
         // preset— gana el que ese preset designa para este escalon.
         exacto: c.tiers.includes(tier) ? 0 : 1,
@@ -300,10 +366,10 @@ async function barrer(spec: string | undefined): Promise<void> {
     if (!perfil.pedidos.some((p) => p.porTier[tier])) continue;
     const opciones = proponibles
       .filter((c) => aptosPara(tier).includes(c))
-      .map((c) => ({ spec: c.spec, costo: costoDe(perfil, { [tier]: c.spec }, base).total }))
+      .map((c) => ({ spec: c.spec, costo: costo({ [tier]: c.spec }).total }))
       .sort((a, b) => a.costo - b.costo);
 
-    const actualCosto = costoDe(perfil, { [tier]: actual[tier] }, base).total;
+    const actualCosto = costo({ [tier]: actual[tier] }).total;
     log(`\n    ${C.bold(tier)}  ${C.dim(`actual ${actual[tier]} → $${actualCosto.toFixed(5)}`)}`);
     for (const o of opciones.slice(0, 5)) {
       const delta = actualCosto > 0 ? (1 - o.costo / actualCosto) * 100 : 0;
@@ -316,7 +382,7 @@ async function barrer(spec: string | undefined): Promise<void> {
 
   // --- Configuraciones completas -------------------------------------------
   // El escalon que se lleva mas plata: cambiar ese solo suele dar casi todo el ahorro.
-  const dominante = TIERS.map((t) => ({ tier: t, costo: costoDe(perfil, { [t]: actual[t] }, base).total }))
+  const dominante = TIERS.map((t) => ({ tier: t, costo: costo({ [t]: actual[t] }).total }))
     .sort((a, b) => b.costo - a.costo)[0]!;
 
   const propuestas: Array<{ etiqueta: string; config: Config }> = [
@@ -337,12 +403,20 @@ async function barrer(spec: string | undefined): Promise<void> {
 
   log(`\n${C.bold('  Configuraciones completas')}`);
   for (const p of propuestas) {
-    const { total, inciertos } = costoDe(perfil, p.config, base);
+    const { total, inciertos, sinCalibrar } = costo(p.config);
     const delta = costoActual > 0 ? (1 - total / costoActual) * 100 : 0;
     const etiqueta = p.etiqueta === 'actual' ? C.yellow('actual') : delta > 0 ? C.green(`${delta.toFixed(0)}% menos`) : C.dim('sin cambio');
     log(`\n    ${C.bold(p.etiqueta.padEnd(28))} $${total.toFixed(5)}  ${etiqueta}`);
     log(C.dim(`      ${nombre(p.config)}`));
     if (inciertos.size) log(C.yellow(`      ⚠ precio estimado para: ${[...inciertos].join(', ')}`));
+    if (sinCalibrar.size) {
+      log(
+        C.yellow(
+          `      ⚠ sin calibrar: ${[...sinCalibrar].join(', ')} — se asume que escribe lo mismo que el actual.` +
+            ' `pnpm tune --calibrate` lo mide.',
+        ),
+      );
+    }
 
     // Los limites de rate son parte del costo real: una opcion mas barata que
     // no aguanta tu concurrencia no es mas barata, es inviable.
@@ -425,7 +499,7 @@ async function barrer(spec: string | undefined): Promise<void> {
           propuestas: propuestas.map((p) => ({
             etiqueta: p.etiqueta,
             config: p.config,
-            costo: costoDe(perfil, p.config, base).total,
+            costo: costo(p.config).total,
           })),
           recomendada: recomendada?.config,
         },
@@ -437,7 +511,7 @@ async function barrer(spec: string | undefined): Promise<void> {
   }
 
   if (recomendada) {
-    const { total } = costoDe(perfil, recomendada.config, base);
+    const { total } = costo(recomendada.config);
     console.log(`\n${C.bold('  Por donde empezar')}  ${C.dim(`${recomendada.etiqueta} · $${total.toFixed(5)}`)}`);
     console.log(C.dim('    Un solo cambio, asi que si la calidad cae sabes exactamente por que.'));
     for (const tier of TIERS) console.log(C.dim(`    ORCHESTATI_MODEL_${tier.toUpperCase()}=${recomendada.config[tier]}`));
@@ -465,9 +539,61 @@ async function barrer(spec: string | undefined): Promise<void> {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Mide cuanto escribe cada modelo candidato.
+ *
+ * Es el arreglo de la suposicion que hacia fallar la prediccion. Barato:
+ * tres prompts por modelo, una sola vez, y el resultado se cachea.
+ */
+async function calibrar(): Promise<void> {
+  const cal = await cargarCalibracion();
+  const candidatos = pricedModels().filter((c) => {
+    const { preset } = parseTierSpec(c.spec);
+    return preset && !presetOf(preset).local && presetUsable(preset);
+  });
+
+  if (candidatos.length === 0) {
+    console.error(C.red('\nNo hay proveedores con credencial para calibrar.\n'));
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(`\n${C.bold('Calibrando verbosidad')} — ${candidatos.length} modelo(s) × ${CALIBRATION_PROMPTS.length} prompts`);
+  console.log(C.dim('  Mide cuanto escribe cada uno. Los tokens de entrada casi no cambian;\n  lo que cambia, y mucho, es cuanto responden.\n'));
+
+  for (const c of candidatos) {
+    process.stdout.write(C.dim(`  ${c.spec.padEnd(34)} `));
+    const m = await medirModelo(c.spec);
+    cal[c.spec] = m;
+    if (m.error) console.log(C.red(`falló: ${m.error.slice(0, 60)}`));
+    else console.log(C.dim(`${m.outputTokens} tokens de salida`));
+  }
+
+  await guardarCalibracion(cal);
+
+  const medidos = Object.entries(cal).filter(([, m]) => !m.error && m.samples > 0);
+  if (medidos.length > 1) {
+    const menor = medidos.reduce((a, b) => (a[1].outputTokens <= b[1].outputTokens ? a : b));
+    console.log(`\n${C.bold('  Verbosidad relativa')}  ${C.dim(`(contra ${menor[0]}, el mas escueto)`)}`);
+    for (const [spec, m] of medidos.sort((a, b) => a[1].outputTokens - b[1].outputTokens)) {
+      const x = m.outputTokens / menor[1].outputTokens;
+      const marca = x >= 2 ? C.yellow(`${x.toFixed(1)}×`) : C.dim(`${x.toFixed(1)}×`);
+      console.log(`    ${spec.padEnd(34)} ${String(m.outputTokens).padStart(5)} tok  ${marca}`);
+    }
+  }
+
+  console.log(C.green(`\n  guardado en ${RUTA_CALIBRACION}`));
+  console.log(C.dim('  El barrido ya corrige por esto. Volvé a calibrar si cambiás de modelos.\n'));
+}
+
 async function main(): Promise<void> {
   loadEnv();
   const spec = process.argv.find((a) => a.startsWith('--from='))?.split('=')[1];
+
+  if (process.argv.includes('--calibrate')) {
+    await calibrar();
+    return;
+  }
 
   if (process.argv.includes('--profile')) {
     const perfil = await perfilar(spec);

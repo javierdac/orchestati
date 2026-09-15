@@ -378,11 +378,16 @@ To find the right configuration for your traffic rather than guessing:
 
 ```bash
 pnpm tune --profile --from=sessions   # one paid pass over your real requests
-pnpm tune                             # free sweep: what each model would cost per tier
-pnpm eval:quality                     # then check the cheaper config still answers well
+pnpm tune --calibrate                 # measure how verbose each candidate model is
+pnpm tune                             # free sweep, as often as you like
+pnpm eval:quality                     # check the cheaper config still answers well
 ```
 
-The profile records tokens per tier; the sweep is arithmetic, so you can run it as often as you want. Tune against your own saved sessions — optimizing against a curated set tunes for the sample, not for what your users ask.
+Tune against your own saved sessions — optimizing against a curated set tunes for the sample, not for what your users ask.
+
+**Read the sweep in this order.** First *where the money goes*: if one tier carries most of the spend, the options on the other three are noise. Then the *ranking* of models for that tier — trust the order, not the percentage. Then change **one tier at a time**, which is why the default recommendation does exactly that: if quality drops, you know what caused it.
+
+Two things the sweep cannot tell you, both by design. It does not measure quality — that is `pnpm eval:quality`. And it can only correct for models it has calibrated; anything else is flagged rather than guessed at.
 
 
 

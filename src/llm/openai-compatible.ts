@@ -228,6 +228,17 @@ export function isPresetName(name: string): name is PresetName {
 }
 
 /**
+ * Acceso tipado a un preset.
+ *
+ * `satisfies` conserva el tipo literal de cada entrada, asi que indexar
+ * PRESETS da una union donde no todos los miembros tienen `local` o `pricing`.
+ * Esto lo normaliza en un solo lugar en vez de anotar el tipo en cada uso.
+ */
+export function presetOf(name: PresetName): EndpointPreset {
+  return PRESETS[name];
+}
+
+/**
  * Un escalon puede apuntar a otro proveedor: `groq:llama-3.3-70b-versatile`.
  *
  * Es lo que permite mezclar. La diferencia de precio entre escalones del mismo
@@ -347,7 +358,7 @@ export class OpenAICompatibleModel extends AiSdkModel {
 
 /** ¿Se puede usar este preset ahora mismo? */
 export function presetUsable(nombre: PresetName): boolean {
-  const p: EndpointPreset = PRESETS[nombre];
+  const p = presetOf(nombre);
   return p.local ? false : p.keyEnv.some((v) => process.env[v]);
 }
 
@@ -371,9 +382,7 @@ export function priceOf(spec: string, fallbackPreset?: PresetName): PriceInfo | 
   const nombre = preset ?? fallbackPreset;
   if (!nombre) return undefined;
 
-  // `satisfies` conserva el tipo literal de cada preset, asi que el acceso
-  // por indice da una union donde no todos los miembros tienen `pricing`.
-  const p: EndpointPreset = PRESETS[nombre];
+  const p = presetOf(nombre);
   if (p.local) return { in: 0, out: 0, known: true };
 
   const exacto = p.pricing?.[model];
@@ -442,6 +451,5 @@ export function limitsOf(spec: string, fallbackPreset?: PresetName): ModelLimits
   const { preset, model } = parseTierSpec(spec);
   const nombre = preset ?? fallbackPreset;
   if (!nombre) return undefined;
-  const p: EndpointPreset = PRESETS[nombre];
-  return p.limits?.[model];
+  return presetOf(nombre).limits?.[model];
 }

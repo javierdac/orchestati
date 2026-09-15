@@ -267,9 +267,39 @@ Requests can come from your saved sessions (`--from=sessions`), a file with one 
 
 The sweep reports three things — where the money goes (tokens and calls per tier), what each priced model would cost on each tier, and a few complete configurations with the env vars to try them. Models whose price came from the conservative fallback rather than the table are flagged, so you know which numbers are solid.
 
-**The sweep predicts direction, not magnitude.** Its arithmetic assumes token counts stay put when the model changes, and they do not. Two recommendations validated end to end: a predicted 67% saving came out at 31%, and a predicted 72% came out at 13%. The *ranking* of the options held both times, which is what you actually need from it.
+#### Why the sweep used to be wrong, and how it was fixed
 
-The second gap has a sharp cause worth knowing: **reasoning models break the assumption badly.** On the same prompt, `openai/gpt-oss-120b` emitted 3,072 output tokens against `gpt-4.1`'s 965. At a third of the price per token it still came out more expensive. After applying a configuration, re-profile with it (`ORCHESTATI_MODEL_DEEP=… pnpm tune --profile`) to get the real number.
+Cost is `tokens × price`. The sweep knows the price exactly — it comes from a table — and used to *assume* the token count stays put when the model changes. The entire error lived in that one term.
+
+Two recommendations validated end to end: a predicted 67% saving came out at 31%, and a predicted 72% came out at 13%. The *ranking* of the options held both times; the magnitude never did.
+
+The second gap has a sharp cause: **reasoning models break the assumption badly.** On the same prompt, `openai/gpt-oss-120b` emitted 3,072 output tokens against `gpt-4.1`'s 965. At a third of the price per token it still came out more expensive — and the sweep was recommending it.
+
+The fix is to measure that difference instead of assuming it away:
+
+```bash
+pnpm tune --calibrate
+```
+
+This sends three short prompts to every usable model and records how much each one writes. The sweep then corrects the profile's token counts by that ratio. It is cheap for a reason worth stating: **input tokens barely change between models** — the prompt is ours — so only output verbosity needs measuring.
+
+Models without a measurement are not silently assumed to write the same amount; the sweep flags them and tells you to calibrate. Re-calibrate when you change the models in play, and after adopting a configuration, re-profile with it (`ORCHESTATI_MODEL_DEEP=… pnpm tune --profile`) for the ground truth.
+
+The first calibration run produced a result worth the whole feature:
+
+```
+openai:gpt-4.1        655 tok  1.0×
+openai:gpt-4.1-nano   700 tok  1.1×
+openai:gpt-4.1-mini   718 tok  1.1×
+openai:gpt-4o         845 tok  1.3×
+openai:gpt-5-mini    2162 tok  3.3×
+openai:gpt-5         3546 tok  5.4×
+openai:gpt-5-nano    5328 tok  8.1×
+```
+
+**`gpt-5-nano` — the cheapest model in the table by price per token — writes 8.1× more than `gpt-4.1`.** Picking it to save money would have cost considerably more. The sweep now says so out loud before you try it.
+
+This is the general shape of the trap: **price per token is not price per answer**, and the gap is largest exactly where a reasoning model is marketed as the budget option.
 
 It also only measures money. A cheaper model can answer worse and that does not show up here, which is what `pnpm eval:quality` is for. Running that loop on the bundled set:
 
@@ -551,6 +581,7 @@ Per-tier prices come from a table in `src/llm/openai-compatible.ts`. It feeds th
 | `pnpm eval:routing` | routing quality: tier accuracy and cost-error direction |
 | `pnpm eval:quality` | does the cheap tier answer well enough? (needs a key, spends money) |
 | `pnpm tune` | sweep model configurations for cost against a one-time profile |
+| `pnpm tune --calibrate` | measure how verbose each model is, so the sweep stops guessing |
 | `pnpm cycle` | sweep, then validate the recommended configuration in one go |
 | `pnpm models` | ask each configured provider which models it actually offers |
 | `pnpm info` | what this system is right now: models and prices per tier, agents, tools |
