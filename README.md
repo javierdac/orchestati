@@ -432,6 +432,10 @@ pnpm typecheck
 
 What is not there yet: the ~20% of the evaluation sets the classifier still gets wrong, and tools executable from the server behind a real interactive gate (today the server deliberately stays read-only).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: you do not need an API key to develop — the mock backend exercises every layer — and if you touch the analyzer or the router, run `pnpm table` and mention which rows moved.
+
 ## License
 
-MIT
+[MIT](LICENSE) © Javier D'Accorso
