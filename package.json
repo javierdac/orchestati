@@ -18,7 +18,8 @@
     "test:watch": "vitest",
     "table": "tsx src/dev/routing-table.ts",
     "eval": "tsx src/dev/eval.ts",
-    "serve": "tsx src/server.ts"
+    "serve": "tsx src/server.ts",
+    "smoke": "tsx src/dev/smoke.ts"
   },
   "dependencies": {
     "ai": "^6.0.0",
