@@ -66,7 +66,8 @@
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build",
     "verify:package": "bash scripts/verify-package.sh",
     "eval:quality": "tsx src/dev/eval-quality.ts",
-    "models": "tsx src/dev/models.ts"
+    "models": "tsx src/dev/models.ts",
+    "tune": "tsx src/dev/tune.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.48",

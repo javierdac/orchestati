@@ -66,6 +66,13 @@ export const PRESETS = {
     label: 'Gemini (nivel gratuito, via endpoint compatible con OpenAI)',
     baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
     keyEnv: ['GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GOOGLE_API_KEY'],
+    // Aproximado, referencia 2026-09.
+    pricing: {
+      'gemini-2.5-flash-lite': { in: 0.1, out: 0.4 },
+      'gemini-2.5-flash': { in: 0.3, out: 2.5 },
+      'gemini-2.5-pro': { in: 1.25, out: 10 },
+    },
+    fallbackPricing: { in: 2, out: 10 },
     models: {
       light: 'gemini-2.5-flash-lite',
       standard: 'gemini-2.5-flash',
@@ -77,6 +84,13 @@ export const PRESETS = {
     label: 'Groq (nivel gratuito, modelos de pesos abiertos)',
     baseURL: 'https://api.groq.com/openai/v1',
     keyEnv: ['GROQ_API_KEY'],
+    // USD por millon de tokens. Aproximado, referencia 2026-09: verificalo
+    // contra la pagina del proveedor antes de sacar conclusiones de plata.
+    pricing: {
+      'llama-3.1-8b-instant': { in: 0.05, out: 0.08 },
+      'llama-3.3-70b-versatile': { in: 0.59, out: 0.79 },
+    },
+    fallbackPricing: { in: 1, out: 2 },
     models: {
       light: 'llama-3.1-8b-instant',
       standard: 'llama-3.3-70b-versatile',
@@ -99,6 +113,12 @@ export const PRESETS = {
     label: 'DeepSeek',
     baseURL: 'https://api.deepseek.com/v1',
     keyEnv: ['DEEPSEEK_API_KEY'],
+    // Aproximado, referencia 2026-09.
+    pricing: {
+      'deepseek-chat': { in: 0.27, out: 1.1 },
+      'deepseek-reasoner': { in: 0.55, out: 2.19 },
+    },
+    fallbackPricing: { in: 1, out: 4 },
     models: {
       light: 'deepseek-chat',
       standard: 'deepseek-chat',
@@ -272,4 +292,65 @@ export function presetsWithCredentials(): PresetName[] {
   return (Object.entries(PRESETS) as Array<[PresetName, EndpointPreset]>)
     .filter(([, p]) => !p.local && p.keyEnv.some((v) => process.env[v]))
     .map(([name]) => name);
+}
+
+export interface PriceInfo {
+  in: number;
+  out: number;
+  /** El precio salio de la tabla o es el fallback conservador del preset. */
+  known: boolean;
+}
+
+/** Precio de un `proveedor:modelo` (o de un modelo del preset indicado). */
+export function priceOf(spec: string, fallbackPreset?: PresetName): PriceInfo | undefined {
+  const { preset, model } = parseTierSpec(spec);
+  const nombre = preset ?? fallbackPreset;
+  if (!nombre) return undefined;
+
+  // `satisfies` conserva el tipo literal de cada preset, asi que el acceso
+  // por indice da una union donde no todos los miembros tienen `pricing`.
+  const p: EndpointPreset = PRESETS[nombre];
+  if (p.local) return { in: 0, out: 0, known: true };
+
+  const exacto = p.pricing?.[model];
+  if (exacto) return { ...exacto, known: true };
+  return p.fallbackPricing ? { ...p.fallbackPricing, known: false } : undefined;
+}
+
+export interface PricedModel {
+  spec: string;
+  price: { in: number; out: number };
+  local: boolean;
+  /**
+   * Escalones para los que algun preset designa este modelo.
+   *
+   * Es el proxy de capacidad que tenemos sin evaluarlos: quien escribio el
+   * preset decidio que modelo sirve para que escalon. Sin esto, ordenar por
+   * precio propone un modelo de 8B para el escalon `deep`, que es justamente
+   * el que existe para los pedidos que ese modelo no puede resolver.
+   */
+  tiers: LlmTier[];
+}
+
+/** Todos los modelos con precio conocido, como `proveedor:modelo`. */
+export function pricedModels(): PricedModel[] {
+  const out: PricedModel[] = [];
+
+  for (const [nombre, preset] of Object.entries(PRESETS) as Array<[PresetName, EndpointPreset]>) {
+    const tiersDe = (modelo: string): LlmTier[] =>
+      (Object.entries(preset.models) as Array<[LlmTier, string]>)
+        .filter(([, m]) => m === modelo)
+        .map(([t]) => t);
+
+    if (preset.local) {
+      for (const m of new Set(Object.values(preset.models))) {
+        out.push({ spec: `${nombre}:${m}`, price: { in: 0, out: 0 }, local: true, tiers: tiersDe(m) });
+      }
+      continue;
+    }
+    for (const [m, price] of Object.entries(preset.pricing ?? {})) {
+      out.push({ spec: `${nombre}:${m}`, price, local: false, tiers: tiersDe(m) });
+    }
+  }
+  return out;
 }

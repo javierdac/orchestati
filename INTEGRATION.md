@@ -372,7 +372,17 @@ ORCHESTATI_MODEL_STANDARD=groq:llama-3.3-70b-versatile
 ORCHESTATI_MODEL_DEEP=openai:gpt-4.1
 ```
 
-Each tier takes `provider:model` or a bare `model`. Run `pnpm eval:quality` against your own requests before assuming any configuration saves you money.
+Each tier takes `provider:model` or a bare `model`.
+
+To find the right configuration for your traffic rather than guessing:
+
+```bash
+pnpm tune --profile --from=sessions   # one paid pass over your real requests
+pnpm tune                             # free sweep: what each model would cost per tier
+pnpm eval:quality                     # then check the cheaper config still answers well
+```
+
+The profile records tokens per tier; the sweep is arithmetic, so you can run it as often as you want. Tune against your own saved sessions — optimizing against a curated set tunes for the sample, not for what your users ask.
 
 
 

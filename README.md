@@ -252,6 +252,23 @@ Two findings came out of building this, both of them defects rather than tradeof
 - **`llm.critic` capped its output at 700 tokens**, and it is the last link of every chain — so it was the one producing the final answer. Architecture answers came back truncated. Removing the cap took quality from 57% to 71%.
 - **The first version of the experiment moved its own control.** The baseline resolved through the `deep` tier, so making that tier cheaper made the baseline cheaper too. Pinning the baseline to a fixed model took the reading from 64% to 79%. An experiment whose control moves measures nothing.
 
+#### Tuning it for your own traffic
+
+Knowing that the default configuration loses money is only useful if you can fix it for *your* requests. `pnpm tune` does that, and it is nearly free.
+
+The trick is that routing is deterministic and the tokens a request consumes barely depend on *which* model answers it — they depend on the request, the agent's prompt and how many turns it takes. The price does depend on the model. So you profile once against the real API, and then sweep configurations with pure arithmetic.
+
+```bash
+pnpm tune --profile --from=sessions   # spends money once, over your real requests
+pnpm tune                             # sweep configurations, free, as often as you like
+```
+
+Requests can come from your saved sessions (`--from=sessions`), a file with one per line (`--from=requests.txt`), or the bundled curated set. Real traffic is the point: tuning against a hand-picked set optimizes for the sample, not for what your users actually ask.
+
+The sweep reports three things — where the money goes (tokens and calls per tier), what each priced model would cost on each tier, and a few complete configurations with the env vars to try them. Models whose price came from the conservative fallback rather than the table are flagged, so you know which numbers are solid.
+
+It only measures money. A cheaper model can answer worse and that does not show up here, which is what `pnpm eval:quality` is for.
+
 #### Measuring the routing itself
 
 Intent accuracy measures a *component*. The routing decision is the *product*, and it used to be judged by eyeballing a table. `pnpm eval:routing` measures it against 33 labeled cases — requests that are not the ones the thresholds were calibrated against:
@@ -506,6 +523,9 @@ Per-tier prices come from a table in `src/llm/openai-compatible.ts`. It feeds th
 | `pnpm table` | routing calibration bench |
 | `pnpm eval` · `pnpm eval b` | classifier accuracy on each held-out set |
 | `pnpm eval:routing` | routing quality: tier accuracy and cost-error direction |
+| `pnpm eval:quality` | does the cheap tier answer well enough? (needs a key, spends money) |
+| `pnpm tune` | sweep model configurations for cost against a one-time profile |
+| `pnpm models` | ask each configured provider which models it actually offers |
 | `pnpm smoke` | smoke test against the real API, one request per tier |
 | `pnpm test` | the test suite |
 | `pnpm verify:package` | installs the built package in a temp project and checks it imports, types and runs |
