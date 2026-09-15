@@ -12,6 +12,7 @@ export * from './router/memory.js';
 export * from './runtime/orchestrator.js';
 export * from './runtime/trace.js';
 export * from './runtime/session.js';
+export * from './adapters/index.js';
 export * from './runtime/outcome.js';
 export * from './llm/model.js';
 export * from './llm/mixed.js';

@@ -466,7 +466,7 @@ for await (const ev of orchestrator.stream('refactor this')) {
 
 In `parallel` three agents write at once, which is why every text event carries its `agentId` and the consumer decides which one to render.
 
-**Sessions** — `InMemorySessionStore` or `FileSessionStore` (append-only JSONL, one file per session, so two processes cannot clobber each other).
+**Sessions** — `InMemorySessionStore` or `FileSessionStore` (append-only JSONL, one file per session, so two processes cannot clobber each other), plus **SQL and Redis adapters** for deployments with more than one instance. The adapters take a client you already have rather than importing a driver, so the package stays dependency-free for everyone who does not use them.
 
 ```ts
 await o.run('write me a CSV parser',  { sessionId: 'javier' });

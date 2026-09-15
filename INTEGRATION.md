@@ -311,53 +311,63 @@ A denial is not a failure: the model is told permission is missing and continues
 
 ### Sessions in your database
 
+Ready-made adapters ship for SQL (Postgres syntax) and Redis. **Neither pulls in a driver** — you pass a client you already have, so the package stays dependency-free for everyone who does not use them.
+
+```ts
+import { SqlSessionStore, ensureSchema } from 'orchestati';
+import { Pool } from 'pg';
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+await ensureSchema(pool);                      // idempotent DDL, or run it yourself
+
+const o = new Orchestrator({ sessions: new SqlSessionStore(pool) });
+```
+
+```ts
+import { RedisSessionStore } from 'orchestati';
+import { createClient } from 'redis';
+
+const redis = createClient({ url: process.env.REDIS_URL });
+await redis.connect();
+
+const o = new Orchestrator({ sessions: new RedisSessionStore(redis) });
+```
+
+Both accept node-redis (`rPush`) and ioredis (`rpush`) shapes, and both keep the same trimming rule as the built-in stores: the **first exchange plus the most recent ones**, because after twenty turns *"now port it to python"* has nothing to refer to otherwise. The SQL store does that trimming in the query rather than pulling a long session into memory to throw most of it away.
+
+If your schema differs, implement `SessionStore` directly — it is three methods:
+
 ```ts
 import type { SessionStore, Message } from 'orchestati';
 
-class PgSessions implements SessionStore {
-  async history(sessionId: string): Promise<Message[]> {
-    const rows = await db.messages.findMany({
-      where: { sessionId }, orderBy: { createdAt: 'desc' }, take: 20,
-    });
-    return rows.reverse().map((r) => ({ role: r.role, content: r.content }));
-  }
-  async append(sessionId: string, messages: Message[]) {
-    await db.messages.createMany({ data: messages.map((m) => ({ sessionId, ...m })) });
-  }
-  async clear(sessionId: string) {
-    await db.messages.deleteMany({ where: { sessionId } });
-  }
+class MySessions implements SessionStore {
+  async history(sessionId: string): Promise<Message[]> { /* … */ }
+  async append(sessionId: string, messages: Message[]): Promise<void> { /* … */ }
+  async clear(sessionId: string): Promise<void> { /* … */ }
 }
-
-const o = new Orchestrator({ sessions: new PgSessions() });
 ```
 
 ### Learned routing that survives a restart
 
-The router's memory is an EWMA per intent↔agent pair. In a serverless or multi-instance deployment, back it with your own store:
+The router's memory is an EWMA per intent↔agent pair. In a serverless or multi-instance deployment it needs to live outside the process:
 
 ```ts
-import { Router, type RouterMemory, type Intent } from 'orchestati';
+import { Router, SqlRouterMemory } from 'orchestati';
 
-class SharedMemory implements RouterMemory {
-  prior(intent: Intent, agentId: string): number { return cache.get(`${intent}:${agentId}`) ?? 0.5; }
-  record(intent: Intent, agentId: string, outcome: number, weight = 1) {
-    void redis.eval(EWMA_SCRIPT, `${intent}:${agentId}`, outcome, weight);
-  }
-  snapshot() { return cache.all(); }
-}
-
-const o = new Orchestrator({ registry, router: new Router(registry, { memory: new SharedMemory() }) });
+const memory = await new SqlRouterMemory(pool).load();   // warms the cache
+const o = new Orchestrator({ registry, router: new Router(registry, { memory }) });
 ```
 
-`prior()` is called once per agent per request, so it must be fast and synchronous — read from a warm cache and write asynchronously.
+Two design points worth knowing, because they shape how you deploy this.
 
-**Give it a real signal.** Without feedback, the memory only learns from failures (escalations, tool errors, empty answers), which says nothing about quality. Wire your thumbs up/down:
+**`prior()` is synchronous, and that is deliberate.** It is called once per agent on every request, in the hot path of routing — it cannot go to the network. Both adapters keep a local cache warmed by `load()` and persist in the background. Call `load()` once at startup, before serving traffic; call `flush()` on shutdown if you want in-flight writes to land.
+
+**The EWMA is computed inside the database, not in your process.** Read-modify-write from two instances loses one of the two updates, silently. The SQL adapter folds the arithmetic into the `ON CONFLICT … DO UPDATE`; the Redis one runs a Lua script. You get last-write-wins on the *cache*, but the persisted value is correct.
+
+A write failure is reported through the `onError` callback and never thrown: the local cache keeps serving, so a database outage degrades routing quality rather than taking the request down.
 
 ```ts
-const res = await o.run(message, { sessionId });
-// …later, when the user rates it
-o.recordFeedback(res.id, rating === 'up' ? 1 : 0);
+new SqlRouterMemory(pool, {}, (err) => logger.warn('router memory write failed', err));
 ```
 
 ---
